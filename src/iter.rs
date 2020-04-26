@@ -1,4 +1,5 @@
 use crate::{
+    arch::prefetch,
     branch::Branch,
     leaf::Leaf,
     search::{find_key_or_next, find_key_or_prev},
@@ -8,6 +9,7 @@ use std::{
     cmp::Ordering,
     ops::{Bound, RangeBounds},
 };
+
 
 /// Find the path to the leaf which contains `key` or the closest higher key.
 fn path_for<'a, K, V>(
@@ -53,6 +55,11 @@ fn step_forward<'a, K, V>(
                             // If it's a leaf, this is our new leaf, we're done.
                             *leaf_ref = Some(branch.get_leaf(index as usize));
                             *index_ref = 0;
+                            // Prefetch the next leaf.
+                            let next_index = (index + 1) as usize;
+                            if next_index < branch.len() {
+                                unsafe { prefetch(branch.get_leaf(next_index)) };
+                            }
                             break;
                         }
                     } else {

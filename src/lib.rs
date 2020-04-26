@@ -10,12 +10,14 @@
     // missing_docs,
     // missing_doc_code_examples
 )]
+#![cfg_attr(core_intrinsics, feature(core_intrinsics))]
 
 use std::fmt::{Debug, Error, Formatter};
 use std::{iter::FromIterator, ops::RangeBounds};
 
 pub mod asmtest;
 
+mod arch;
 mod search;
 mod types;
 
