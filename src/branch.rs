@@ -3,57 +3,26 @@ use crate::{
     search::{find_key, find_key_linear},
     types::{InsertResult, NodeSize, RemoveResult},
 };
+use node::Node;
 use sized_chunks::Chunk;
 use std::fmt::{Debug, Error, Formatter};
 
 /// A branch node holds mappings of high keys to child nodes.
 pub(crate) struct Branch<K, V> {
-    pub(crate) height: usize,
-    pub(crate) keys: Chunk<K, NodeSize>,
-    pub(crate) children: Chunk<Node<K, V>, NodeSize>,
+    height: usize,
+    keys: Chunk<K, NodeSize>,
+    children: Chunk<Node<K, V>, NodeSize>,
 }
 
-pub(crate) enum Node<K, V> {
-    Branch(Box<Branch<K, V>>),
-    Leaf(Box<Leaf<K, V>>),
-}
-
-impl<K, V> From<Leaf<K, V>> for Node<K, V> {
-    fn from(node: Leaf<K, V>) -> Self {
-        Box::new(node).into()
-    }
-}
-
-impl<K, V> From<Box<Leaf<K, V>>> for Node<K, V> {
-    fn from(node: Box<Leaf<K, V>>) -> Self {
-        Self::Leaf(node)
-    }
-}
-
-impl<K, V> From<Branch<K, V>> for Node<K, V> {
-    fn from(node: Branch<K, V>) -> Self {
-        Box::new(node).into()
-    }
-}
-
-impl<K, V> From<Box<Branch<K, V>>> for Node<K, V> {
-    fn from(node: Box<Branch<K, V>>) -> Self {
-        Self::Branch(node)
-    }
-}
-
-impl<K, V> Node<K, V> {
-    fn unwrap_branch(self) -> Box<Branch<K, V>> {
-        match self {
-            Node::Branch(branch) => branch,
-            _ => panic!("unwrap_branch on not-branch"),
-        }
-    }
-
-    fn unwrap_leaf(self) -> Box<Leaf<K, V>> {
-        match self {
-            Node::Leaf(leaf) => leaf,
-            _ => panic!("unwrap_leaf on not-leaf"),
+impl<K, V> Drop for Branch<K, V> {
+    fn drop(&mut self) {
+        while !self.children.is_empty() {
+            let node = self.children.pop_front();
+            if self.height > 1 {
+                unsafe { node.unwrap_branch() };
+            } else {
+                unsafe { node.unwrap_leaf() };
+            }
         }
     }
 }
@@ -65,6 +34,10 @@ impl<K, V> Branch<K, V> {
             keys: Chunk::new(),
             children: Chunk::new(),
         }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.keys.len()
     }
 
     fn is_empty(&self) -> bool {
@@ -79,13 +52,83 @@ impl<K, V> Branch<K, V> {
         self.keys.last().unwrap()
     }
 
-    fn split(mut self) -> (Branch<K, V>, Branch<K, V>) {
+    pub(crate) fn has_leaves(&self) -> bool {
+        self.height == 1
+    }
+
+    pub(crate) fn has_branches(&self) -> bool {
+        self.height > 1
+    }
+
+    pub(crate) fn height(&self) -> usize {
+        self.height
+    }
+
+    pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V> {
+        debug_assert!(self.has_branches()); // Only branches higher than 1 have Branch children.
+        unsafe { self.children[index].as_branch() }
+    }
+
+    pub(crate) fn get_leaf(&self, index: usize) -> &Leaf<K, V> {
+        debug_assert!(self.has_leaves()); // Only branches at height 1 have Leaf children.
+        unsafe { self.children[index].as_leaf() }
+    }
+
+    pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Branch<K, V> {
+        debug_assert!(self.has_branches()); // Only branches higher than 1 have Branch children.
+        unsafe { self.children[index].as_branch_mut() }
+    }
+
+    pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V> {
+        debug_assert!(self.has_leaves()); // Only branches at height 1 have Leaf children.
+        unsafe { self.children[index].as_leaf_mut() }
+    }
+
+    pub(crate) fn last_key(&self) -> Option<&K> {
+        self.keys.last()
+    }
+
+    pub(crate) fn push_key(&mut self, key: K) {
+        self.keys.push_back(key)
+    }
+
+    pub(crate) fn push_branch(&mut self, branch: Box<Branch<K, V>>) {
+        debug_assert!(self.has_branches());
+        self.children.push_back(branch.into())
+    }
+
+    pub(crate) fn push_leaf(&mut self, leaf: Box<Leaf<K, V>>) {
+        debug_assert!(self.has_leaves());
+        self.children.push_back(leaf.into())
+    }
+
+    fn remove_branch(&mut self, index: usize) -> Box<Branch<K, V>> {
+        debug_assert!(self.has_branches());
+        unsafe { self.children.remove(index).unwrap_branch() }
+    }
+
+    fn remove_leaf(&mut self, index: usize) -> Box<Leaf<K, V>> {
+        debug_assert!(self.has_leaves());
+        unsafe { self.children.remove(index).unwrap_leaf() }
+    }
+
+    fn remove_last_branch(&mut self) -> Box<Branch<K, V>> {
+        debug_assert!(self.has_branches());
+        unsafe { self.children.pop_back().unwrap_branch() }
+    }
+
+    // fn remove_last_leaf(&mut self) -> Box<Leaf<K, V>> {
+    //     debug_assert!(self.has_leaves());
+    //     unsafe { self.children.pop_back().unwrap_leaf() }
+    // }
+
+    fn split(mut self: Box<Self>) -> (Box<Branch<K, V>>, Box<Branch<K, V>>) {
         let half = self.keys.len() / 2;
-        let left = Branch {
+        let left = Box::new(Branch {
             height: self.height,
             keys: Chunk::from_front(&mut self.keys, half),
             children: Chunk::from_front(&mut self.children, half),
-        };
+        });
         (left, self)
     }
 
@@ -94,13 +137,10 @@ impl<K, V> Branch<K, V> {
         let mut path = Vec::new();
         loop {
             path.push((branch, 0));
-            match branch.children[0] {
-                Node::Branch(ref child) => {
-                    branch = child;
-                }
-                Node::Leaf(ref leaf) => {
-                    return (path, Some(leaf), 0);
-                }
+            if branch.height > 1 {
+                branch = branch.get_branch(0);
+            } else {
+                return (path, Some(branch.get_leaf(0)), 0);
             }
         }
     }
@@ -111,13 +151,11 @@ impl<K, V> Branch<K, V> {
         loop {
             let index = branch.keys.len() - 1;
             path.push((branch, index as isize));
-            match branch.children[index] {
-                Node::Branch(ref child) => {
-                    branch = child;
-                }
-                Node::Leaf(ref leaf) => {
-                    return (path, Some(leaf), leaf.keys.len() - 1);
-                }
+            if branch.height > 1 {
+                branch = branch.get_branch(index);
+            } else {
+                let leaf = branch.get_leaf(index);
+                return (path, Some(leaf), leaf.keys.len() - 1);
             }
         }
     }
@@ -140,9 +178,10 @@ where
         let mut ptr = self;
         loop {
             if let Some(index) = find_key_linear(&ptr.keys, key) {
-                match &ptr.children[index] {
-                    Node::Leaf(leaf) => return leaf.get_linear(key),
-                    Node::Branch(child) => ptr = child,
+                if ptr.height > 1 {
+                    ptr = ptr.get_branch(index);
+                } else {
+                    return ptr.get_leaf(index).get_linear(key);
                 }
             } else {
                 return None;
@@ -154,9 +193,10 @@ where
         let mut ptr = self;
         loop {
             if let Some(index) = find_key(&ptr.keys, key) {
-                match &ptr.children[index] {
-                    Node::Leaf(leaf) => return leaf.get(key),
-                    Node::Branch(child) => ptr = child,
+                if ptr.height > 1 {
+                    ptr = ptr.get_branch(index);
+                } else {
+                    return ptr.get_leaf(index).get(key);
                 }
             } else {
                 return None;
@@ -192,11 +232,10 @@ where
                 if let Some(ref mut path) = path {
                     path.push((&*ptr, index as isize));
                 }
-                match &ptr.children[index] {
-                    Node::Leaf(leaf) => return Some(leaf),
-                    Node::Branch(child) => {
-                        ptr = child;
-                    }
+                if ptr.height > 1 {
+                    ptr = ptr.get_branch(index);
+                } else {
+                    return Some(ptr.get_leaf(index));
                 }
             } else {
                 return None;
@@ -219,9 +258,10 @@ where
                 if let Some(ref mut path) = path {
                     path.push((&mut *ptr, index));
                 }
-                match &mut ptr.children[index] {
-                    Node::Leaf(leaf) => return Some(leaf),
-                    Node::Branch(child) => ptr = child,
+                if ptr.height > 1 {
+                    ptr = ptr.get_branch_mut(index);
+                } else {
+                    return Some(ptr.get_leaf_mut(index));
                 }
             } else {
                 return None;
@@ -233,27 +273,28 @@ where
         // TODO: this algorithm could benefit from the addition of neighbour
         // checking to reduce splitting.
         if let Some(index) = find_key(&self.keys, &key) {
-            let (split_child, key, value) = match &mut self.children[index] {
-                Node::Branch(child) => match child.insert(key, value) {
-                    InsertResult::Full(key, value) => (true, key, value),
+            let (key, value) = {
+                let result = if self.has_branches() {
+                    self.get_branch_mut(index).insert(key, value)
+                } else {
+                    self.get_leaf_mut(index).insert(key, value)
+                };
+                match result {
+                    InsertResult::Full(key, value) => (key, value),
                     result => return result,
-                },
-                Node::Leaf(leaf) => match leaf.insert(key, value) {
-                    InsertResult::Full(key, value) => (false, key, value),
-                    result => return result,
-                },
+                }
             };
             // Fall through from match = leaf is full and needs to be split.
             if self.is_full() {
                 InsertResult::Full(key, value)
-            } else if split_child {
-                let (left, right) = self.children.remove(index).unwrap_branch().split();
+            } else if self.has_branches() {
+                let (left, right) = self.remove_branch(index).split();
                 self.keys.insert(index, left.highest().clone());
                 self.children
                     .insert_from(index, vec![left.into(), right.into()]);
                 self.insert(key, value)
             } else {
-                let (left, right) = self.children.remove(index).unwrap_leaf().split();
+                let (left, right) = self.remove_leaf(index).split();
                 self.keys.insert(index, left.highest().clone());
                 self.children
                     .insert_from(index, vec![left.into(), right.into()]);
@@ -261,41 +302,40 @@ where
             }
         } else {
             let end_index = self.keys.len() - 1;
-            let (split_child, key, value) = match &mut self.children[end_index] {
-                Node::Branch(child) => {
+            let (key, value) = {
+                if self.has_branches() {
                     self.keys[end_index] = key.clone();
-                    match child.insert(key, value) {
-                        InsertResult::Full(key, value) => (true, key, value),
+                    match self.get_branch_mut(end_index).insert(key, value) {
+                        InsertResult::Full(key, value) => (key, value),
                         result => return result,
                     }
-                }
-                Node::Leaf(leaf) => {
+                } else {
+                    let leaf = self.get_leaf_mut(end_index);
                     if !leaf.is_full() {
                         leaf.keys.push_back(key.clone());
                         leaf.values.push_back(value);
                         self.keys[end_index] = key;
                         return InsertResult::Added;
                     }
-                    (false, key, value)
+                    (key, value)
                 }
             };
             if self.is_full() {
                 InsertResult::Full(key, value)
-            } else if split_child {
-                let (left, right) = self.children.pop_back().unwrap_branch().split();
+            } else if self.has_branches() {
+                let (left, right) = self.remove_last_branch().split();
                 self.keys
                     .insert(self.keys.len() - 1, left.highest().clone());
-                self.children.push_back(Node::Branch(Box::new(left)));
-                self.children.push_back(Node::Branch(Box::new(right)));
+                self.children.push_back(left.into());
+                self.children.push_back(right.into());
                 self.insert(key, value)
             } else {
-                let leaf = Leaf {
+                let leaf = Box::new(Leaf {
                     keys: Chunk::unit(key.clone()),
                     values: Chunk::unit(value),
-                }
-                .into();
+                });
                 self.keys.push_back(key);
-                self.children.push_back(leaf);
+                self.children.push_back(leaf.into());
                 InsertResult::Added
             }
         }
@@ -310,14 +350,19 @@ where
         // for this method to record somewhere which nodes have become underfull, in order to
         // avoid having to rebalance the full tree.
         if let Some(index) = find_key(&self.keys, &key) {
-            let result = match &mut self.children[index] {
-                Node::Leaf(ref mut leaf) => leaf.remove(key),
-                Node::Branch(ref mut child) => child.remove(key),
+            let result = if self.has_branches() {
+                self.get_branch_mut(index).remove(key)
+            } else {
+                self.get_leaf_mut(index).remove(key)
             };
             match result {
                 RemoveResult::DeletedAndEmpty(key, value) => {
                     self.keys.remove(index);
-                    self.children.remove(index);
+                    if self.has_branches() {
+                        self.remove_branch(index);
+                    } else {
+                        self.remove_leaf(index);
+                    }
                     if self.is_empty() {
                         RemoveResult::DeletedAndEmpty(key, value)
                     } else {
@@ -344,13 +389,11 @@ impl<K, V> Branch<K, V> {
         }
         writeln!(f, "{}Branch(height = {})", indent, self.height)?;
         for (index, key) in self.keys.iter().enumerate() {
-            match &self.children[index] {
-                Node::Leaf(leaf) => writeln!(f, "{}  [{:?}]: {:?}", indent, key, leaf)?,
-                // Node::Leaf(_leaf) => writeln!(f, "{}  [{:?}]: [...]", indent, key)?,
-                Node::Branch(child) => {
-                    writeln!(f, "{}  [{:?}]:", indent, key)?;
-                    child.tree_fmt(f, level + 1)?;
-                }
+            if self.has_branches() {
+                writeln!(f, "{}  [{:?}]:", indent, key)?;
+                self.get_branch(index).tree_fmt(f, level + 1)?;
+            } else {
+                writeln!(f, "{}  [{:?}]: {:?}", indent, key, self.get_leaf(index))?;
             }
         }
         Ok(())
@@ -364,5 +407,81 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         self.tree_fmt(f, 0)
+    }
+}
+
+// Never leak this monster to the rest of the crate.
+mod node {
+    use crate::{branch::Branch, leaf::Leaf};
+    use std::{marker::PhantomData, ptr::NonNull};
+
+    pub(crate) struct Node<K, V> {
+        types: PhantomData<(K, V)>,
+        node: NonNull<()>,
+    }
+
+    impl<K, V> Drop for Node<K, V> {
+        fn drop(&mut self) {
+            // Nodes should never be dropped directly.
+            // Branch has to make sure they're dropped correctly,
+            // because only Branch knows whether they contain Leaves or Branches.
+            unreachable!(
+                "PalmTree: tried to drop a Node pointer directly, this should never happen"
+            )
+        }
+    }
+
+    impl<K, V> From<Box<Leaf<K, V>>> for Node<K, V> {
+        fn from(node: Box<Leaf<K, V>>) -> Self {
+            Self {
+                types: PhantomData,
+                // TODO this is better expressed with Box::into_raw_non_null, when that stabilises,
+                // no need for an unsafe block here when it does.
+                node: unsafe { NonNull::new_unchecked(Box::into_raw(node).cast()) },
+            }
+        }
+    }
+
+    impl<K, V> From<Box<Branch<K, V>>> for Node<K, V> {
+        fn from(node: Box<Branch<K, V>>) -> Self {
+            Self {
+                types: PhantomData,
+                node: unsafe { NonNull::new_unchecked(Box::into_raw(node).cast()) },
+            }
+        }
+    }
+
+    impl<K, V> Node<K, V> {
+        pub(crate) unsafe fn unwrap_branch(self) -> Box<Branch<K, V>> {
+            let out = Box::from_raw(self.node.as_ptr().cast());
+            std::mem::forget(self);
+            out
+        }
+
+        pub(crate) unsafe fn unwrap_leaf(self) -> Box<Leaf<K, V>> {
+            let out = Box::from_raw(self.node.as_ptr().cast());
+            std::mem::forget(self);
+            out
+        }
+
+        pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V> {
+            let ptr: *const Branch<K, V> = self.node.cast().as_ptr();
+            ptr.as_ref().unwrap()
+        }
+
+        pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V> {
+            let ptr: *const Leaf<K, V> = self.node.cast().as_ptr();
+            ptr.as_ref().unwrap()
+        }
+
+        pub(crate) unsafe fn as_branch_mut(&mut self) -> &mut Branch<K, V> {
+            let ptr: *mut Branch<K, V> = self.node.cast().as_ptr();
+            ptr.as_mut().unwrap()
+        }
+
+        pub(crate) unsafe fn as_leaf_mut(&mut self) -> &mut Leaf<K, V> {
+            let ptr: *mut Leaf<K, V> = self.node.cast().as_ptr();
+            ptr.as_mut().unwrap()
+        }
     }
 }

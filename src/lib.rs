@@ -14,8 +14,6 @@
 use std::fmt::{Debug, Error, Formatter};
 use std::{iter::FromIterator, ops::RangeBounds};
 
-use sized_chunks::Chunk;
-
 pub mod asmtest;
 
 mod search;
@@ -68,14 +66,14 @@ where
         fn push_stack<K: Clone, V>(child: Box<Branch<K, V>>, stack: &mut Vec<Box<Branch<K, V>>>) {
             let mut parent = stack
                 .pop()
-                .unwrap_or_else(|| Branch::new(child.height + 1).into());
+                .unwrap_or_else(|| Branch::new(child.height() + 1).into());
             if parent.is_full() {
-                let height = parent.height;
+                let height = parent.height();
                 push_stack(parent, stack);
                 parent = Box::new(Branch::new(height));
             }
-            parent.keys.push_back(child.highest().clone());
-            parent.children.push_back(child.into());
+            parent.push_key(child.highest().clone());
+            parent.push_branch(child);
             stack.push(parent);
         }
 
@@ -107,8 +105,8 @@ where
                     parent = Box::new(Branch::new(1));
                 }
 
-                parent.keys.push_back(leaf.keys.last().unwrap().clone());
-                parent.children.push_back(leaf.into());
+                parent.push_key(leaf.keys.last().unwrap().clone());
+                parent.push_leaf(leaf);
 
                 leaf = Box::new(Leaf::new());
             }
@@ -132,8 +130,8 @@ where
             push_stack(parent, &mut stack);
             parent = Box::new(Branch::new(1));
         }
-        parent.keys.push_back(leaf.keys.last().unwrap().clone());
-        parent.children.push_back(leaf.into());
+        parent.push_key(leaf.keys.last().unwrap().clone());
+        parent.push_leaf(leaf);
 
         // Push parent into the parent above it.
         push_stack(parent, &mut stack);
@@ -204,17 +202,11 @@ where
                 }
                 InsertResult::Replaced(value) => Some(value),
                 InsertResult::Full(key, value) => {
-                    let height = root.height + 1;
-                    let key2 = root.keys.last().unwrap().clone();
-                    let child = std::mem::replace(
-                        &mut *root,
-                        Box::new(Branch {
-                            height,
-                            keys: Chunk::unit(key2),
-                            children: Chunk::new(),
-                        }),
-                    );
-                    root.children.push_back(child.into());
+                    let height = root.height() + 1;
+                    let key2 = root.last_key().unwrap().clone();
+                    let child = std::mem::replace(&mut *root, Box::new(Branch::new(height)));
+                    root.push_key(key2);
+                    root.push_branch(child);
                     self.insert(key, value)
                 }
             }

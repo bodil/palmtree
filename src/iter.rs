@@ -1,5 +1,5 @@
 use crate::{
-    branch::{Branch, Node},
+    branch::Branch,
     leaf::Leaf,
     search::{find_key_or_next, find_key_or_prev},
     PalmTree,
@@ -42,21 +42,18 @@ fn step_forward<'a, K, V>(
                 // Pop a branch off the top of the stack and examine it.
                 if let Some((branch, mut index)) = stack.pop() {
                     index += 1;
-                    if index < branch.keys.len() as isize {
+                    if index < branch.len() as isize {
                         // If we're not at the end yet, push the branch back on the stack and look at the next child.
                         stack.push((branch, index));
-                        match &branch.children[index as usize] {
-                            // If it's a leaf, this is our new leaf, we're done.
-                            Node::Leaf(leaf) => {
-                                *leaf_ref = Some(leaf);
-                                *index_ref = 0;
-                                break;
-                            }
+                        if branch.has_branches() {
                             // If it's a branch, push it on the stack and go through the loop again with this branch.
-                            Node::Branch(child) => {
-                                stack.push((child, -1));
-                                continue;
-                            }
+                            stack.push((branch.get_branch(index as usize), -1));
+                            continue;
+                        } else {
+                            // If it's a leaf, this is our new leaf, we're done.
+                            *leaf_ref = Some(branch.get_leaf(index as usize));
+                            *index_ref = 0;
+                            break;
                         }
                     } else {
                         // If this branch is exhausted, go round the loop again to look at its parent.
@@ -90,18 +87,17 @@ fn step_back<'a, K, V>(
                         index -= 1;
                         // If we're not at the end yet, push the branch back on the stack and look at the next child.
                         stack.push((branch, index));
-                        match &branch.children[index as usize] {
-                            // If it's a leaf, this is our new leaf, we're done.
-                            Node::Leaf(leaf) => {
-                                *leaf_ref = Some(leaf);
-                                *index_ref = leaf.keys.len() - 1;
-                                break;
-                            }
+                        if branch.has_branches() {
+                            let child = branch.get_branch(index as usize);
                             // If it's a branch, push it on the stack and go through the loop again with this branch.
-                            Node::Branch(child) => {
-                                stack.push((child, child.keys.len() as isize));
-                                continue;
-                            }
+                            stack.push((child, child.len() as isize));
+                            continue;
+                        } else {
+                            let leaf = branch.get_leaf(index as usize);
+                            // If it's a leaf, this is our new leaf, we're done.
+                            *leaf_ref = Some(leaf);
+                            *index_ref = leaf.keys.len() - 1;
+                            break;
                         }
                     } else {
                         // If this branch is exhausted, go round the loop again to look at its parent.

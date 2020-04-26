@@ -30,11 +30,6 @@ fn insert_sequence(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("std::BTreeMap::from_iter", size),
-            size,
-            |b, &size| b.iter(|| BTreeMap::<usize, usize>::from_iter((0..size).map(|i| (i, i)))),
-        );
-        group.bench_with_input(
             BenchmarkId::new("b+tree::insert", size),
             size,
             |b, &size| {

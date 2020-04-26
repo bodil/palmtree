@@ -35,12 +35,12 @@ impl<K, V> Leaf<K, V> {
         self.keys.last().unwrap()
     }
 
-    pub(crate) fn split(mut self) -> (Leaf<K, V>, Leaf<K, V>) {
+    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V>>, Box<Leaf<K, V>>) {
         let half = self.keys.len() / 2;
-        let left = Leaf {
+        let left = Box::new(Leaf {
             keys: Chunk::from_front(&mut self.keys, half),
             values: Chunk::from_front(&mut self.values, half),
-        };
+        });
         (left, self)
     }
 }
