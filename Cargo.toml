@@ -1,0 +1,20 @@
+[package]
+name = "palmtree"
+version = "0.1.0"
+authors = ["Bodil Stokke <bodil@bodil.org>"]
+edition = "2018"
+license = "MPL-2.0+"
+
+[[bench]]
+name = "palmtree"
+harness = false
+
+[dependencies]
+sized-chunks = { path = "../sized-chunks" }
+# sized-chunks = "0.5.1"
+refpool = "0.3.1"
+typenum = "1.12"
+
+[dev-dependencies]
+criterion = "0.3"
+rand = "0.7"
