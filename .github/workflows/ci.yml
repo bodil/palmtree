@@ -88,6 +88,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v2
+              name: Checkout project
             - uses: actions/cache@v1
               name: Cache corpus
               id: cache-corpus
@@ -101,12 +102,25 @@ jobs:
                   path: fuzz/artifacts
                   key: fuzz-artifacts
             - uses: actions-rs/toolchain@v1
+              name: Install Rust
               with:
                   profile: minimal
                   toolchain: nightly
                   override: true
             - uses: actions-rs/install@v0.1
+              name: Install cargo-fuzz
               with:
                   crate: cargo-fuzz
                   version: latest
-            - run: cargo fuzz run palmtree -- -max_total_time=600 # fuzz for 10 minutes
+            - name: Fuzz for 10 minutes
+              run: cargo fuzz run palmtree -- -max_total_time=600 # fuzz for 10 minutes
+            - uses: actions/upload-artifact@v1
+              name: Publish artifacts
+              with:
+                  name: fuzz-artifacts
+                  path: fuzz/artifacts
+            - uses: actions/upload-artifact@v1
+              name: Publish corpus
+              with:
+                  name: fuzz-corpus
+                  path: fuzz/corpus
