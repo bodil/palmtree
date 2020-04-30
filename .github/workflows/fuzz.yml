@@ -21,8 +21,7 @@ jobs:
                   path: fuzz/corpus/${{ matrix.target }}
                   key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
                   restore-keys: |
-                      fuzz-corpus-${{ matrix.target }}
-                      fuzz-corpus-
+                      fuzz-corpus-${{ matrix.target }}-
             - uses: actions-rs/toolchain@v1
               name: Install Rust
               with:
