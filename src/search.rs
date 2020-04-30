@@ -141,11 +141,9 @@ where
             // you to a node where this doesn't hold, so we have to check if we need to step forward.
             // If we do, we can depend on the next neighbour node containing the right key as its first
             // entry.
-            if ptr.key().unwrap() < key {
-                if !ptr.step_forward() {
-                    // If we can't step forward, we were at the highest key already, so the iterator is empty.
-                    ptr = Self::null();
-                }
+            if ptr.key().unwrap() < key && !ptr.step_forward() {
+                // If we can't step forward, we were at the highest key already, so the iterator is empty.
+                ptr = Self::null();
             }
         } else {
             // No target node for start bound means the key is higher than our highest value, so we leave ptr empty.
@@ -160,11 +158,9 @@ where
             ptr.stack = path;
             ptr.index = find_key_or_next(&leaf.keys, key);
             ptr.leaf = Some(leaf);
-            if &leaf.keys[ptr.index] == key {
-                if !ptr.step_forward() {
-                    // If we can't step forward, we were at the highest key already, so the iterator is empty.
-                    ptr = Self::null();
-                }
+            if &leaf.keys[ptr.index] == key && !ptr.step_forward() {
+                // If we can't step forward, we were at the highest key already, so the iterator is empty.
+                ptr = Self::null();
             }
         } else {
             // No target node for start bound means the key is higher than our highest value, so we leave ptr empty.
@@ -193,17 +189,11 @@ where
             ptr.stack = path;
             ptr.index = find_key_or_prev(&leaf.keys, key);
             ptr.leaf = Some(leaf);
-            if &leaf.keys[ptr.index] == key {
-                if !ptr.step_back() {
-                    // If we can't step back, we were at the lowest key already, so the iterator is empty.
-                    return Self::null();
-                }
-            } else if &leaf.keys[ptr.index] > key {
-                // If we've found a value higher than key, we're one branch ahead of the target key, step back.
-                if !ptr.step_back() {
-                    // If we can't step back, we were at the lowest key already, so the iterator is empty.
-                    return Self::null();
-                }
+            // If we've found a value equal to key, we step back one key.
+            // If we've found a value higher than key, we're one branch ahead of the target key and step back.
+            if &leaf.keys[ptr.index] >= key && !ptr.step_back() {
+                // If we can't step back, we were at the lowest key already, so the iterator is empty.
+                return Self::null();
             }
             ptr
         } else {
