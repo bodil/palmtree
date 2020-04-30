@@ -1,7 +1,13 @@
+use crate::branch::Branch;
+use sized_chunks::Chunk;
 use typenum::consts::*;
 
 pub(crate) type NodeSize = U64;
 pub(crate) type LeafSize = U64;
+pub(crate) type MaxHeight = U16;
+
+pub(crate) type Path<'a, K, V> = Chunk<(&'a Branch<K, V>, isize), MaxHeight>;
+pub(crate) type PathMut<K, V> = Chunk<(*mut Branch<K, V>, usize), MaxHeight>;
 
 #[derive(Debug)]
 pub(crate) enum InsertResult<K, V> {

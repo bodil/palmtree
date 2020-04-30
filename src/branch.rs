@@ -1,11 +1,12 @@
 use crate::{
     leaf::Leaf,
     search::{find_key, find_key_linear},
-    types::{InsertResult, NodeSize, RemoveResult},
+    types::{InsertResult, MaxHeight, NodeSize, Path, PathMut, RemoveResult},
 };
 use node::Node;
 use sized_chunks::Chunk;
 use std::fmt::{Debug, Error, Formatter};
+use typenum::Unsigned;
 
 /// A branch node holds mappings of high keys to child nodes.
 pub(crate) struct Branch<K, V> {
@@ -17,6 +18,9 @@ pub(crate) struct Branch<K, V> {
 impl<K, V> Drop for Branch<K, V> {
     fn drop(&mut self) {
         while !self.children.is_empty() {
+            // The `Node` type can't drop itself because it doesn't know
+            // whether it's a Branch or a Leaf, so we *must* drop every `Node`
+            // from the `Branch` it's stored in.
             let node = self.children.pop_front();
             if self.height > 1 {
                 unsafe { node.unwrap_branch() };
@@ -29,6 +33,7 @@ impl<K, V> Drop for Branch<K, V> {
 
 impl<K, V> Branch<K, V> {
     pub(crate) fn new(height: usize) -> Self {
+        debug_assert!(height <= MaxHeight::USIZE);
         Branch {
             height,
             keys: Chunk::new(),
@@ -40,7 +45,7 @@ impl<K, V> Branch<K, V> {
         self.keys.len()
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
@@ -112,7 +117,7 @@ impl<K, V> Branch<K, V> {
         unsafe { self.children.remove(index).unwrap_leaf() }
     }
 
-    fn remove_last_branch(&mut self) -> Box<Branch<K, V>> {
+    pub(crate) fn remove_last_branch(&mut self) -> Box<Branch<K, V>> {
         debug_assert!(self.has_branches());
         unsafe { self.children.pop_back().unwrap_branch() }
     }
@@ -130,34 +135,6 @@ impl<K, V> Branch<K, V> {
             children: Chunk::from_front(&mut self.children, half),
         });
         (left, self)
-    }
-
-    pub(crate) fn start_path(&self) -> (Vec<(&Branch<K, V>, isize)>, Option<&Leaf<K, V>>, usize) {
-        let mut branch = self;
-        let mut path = Vec::new();
-        loop {
-            path.push((branch, 0));
-            if branch.height > 1 {
-                branch = branch.get_branch(0);
-            } else {
-                return (path, Some(branch.get_leaf(0)), 0);
-            }
-        }
-    }
-
-    pub(crate) fn end_path(&self) -> (Vec<(&Branch<K, V>, isize)>, Option<&Leaf<K, V>>, usize) {
-        let mut branch = self;
-        let mut path = Vec::new();
-        loop {
-            let index = branch.keys.len() - 1;
-            path.push((branch, index as isize));
-            if branch.height > 1 {
-                branch = branch.get_branch(index);
-            } else {
-                let leaf = branch.get_leaf(index);
-                return (path, Some(leaf), leaf.keys.len() - 1);
-            }
-        }
     }
 }
 
@@ -224,18 +201,22 @@ where
     pub(crate) fn leaf_for<'a>(
         &'a self,
         key: &K,
-        mut path: Option<&mut Vec<(&'a Branch<K, V>, isize)>>,
+        mut path: Option<&mut Path<'a, K, V>>,
     ) -> Option<&'a Leaf<K, V>> {
-        let mut ptr = self;
+        let mut branch = self;
+
         loop {
-            if let Some(index) = find_key(&ptr.keys, key) {
+            if branch.is_empty() {
+                return None;
+            }
+            if let Some(index) = find_key(&branch.keys, key) {
                 if let Some(ref mut path) = path {
-                    path.push((&*ptr, index as isize));
+                    path.push_back((&*branch, index as isize));
                 }
-                if ptr.height > 1 {
-                    ptr = ptr.get_branch(index);
+                if branch.height > 1 {
+                    branch = branch.get_branch(index);
                 } else {
-                    return Some(ptr.get_leaf(index));
+                    return Some(branch.get_leaf(index));
                 }
             } else {
                 return None;
@@ -250,18 +231,21 @@ where
     pub(crate) fn leaf_for_mut<'a>(
         &'a mut self,
         key: &K,
-        mut path: Option<&mut Vec<(*mut Branch<K, V>, usize)>>,
+        mut path: Option<&mut PathMut<K, V>>,
     ) -> Option<&'a mut Leaf<K, V>> {
-        let mut ptr = self;
+        let mut branch = self;
         loop {
-            if let Some(index) = find_key(&ptr.keys, key) {
+            if branch.is_empty() {
+                return None;
+            }
+            if let Some(index) = find_key(&branch.keys, key) {
                 if let Some(ref mut path) = path {
-                    path.push((&mut *ptr, index));
+                    path.push_back((&mut *branch, index));
                 }
-                if ptr.height > 1 {
-                    ptr = ptr.get_branch_mut(index);
+                if branch.height > 1 {
+                    branch = branch.get_branch_mut(index);
                 } else {
-                    return Some(ptr.get_leaf_mut(index));
+                    return Some(branch.get_leaf_mut(index));
                 }
             } else {
                 return None;
@@ -377,12 +361,12 @@ where
     }
 }
 
-impl<K, V> Branch<K, V> {
-    fn tree_fmt(&self, f: &mut Formatter<'_>, level: usize) -> Result<(), Error>
-    where
-        K: Debug,
-        V: Debug,
-    {
+impl<K, V> Branch<K, V>
+where
+    K: Debug,
+    V: Debug,
+{
+    fn tree_fmt(&self, f: &mut Formatter<'_>, level: usize) -> Result<(), Error> {
         let mut indent = String::new();
         for _ in 0..level {
             indent += "    ";

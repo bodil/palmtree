@@ -23,6 +23,10 @@ impl<K, V> Leaf<K, V> {
         }
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.keys.len()
+    }
+
     fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
@@ -113,11 +117,7 @@ where
     V: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        writeln!(
-            f,
-            "Leaf {:?} {:?}",
-            self.keys.as_slice(),
-            self.values.as_slice()
-        )
+        let pairs: Vec<_> = self.keys.iter().zip(self.values.iter()).collect();
+        writeln!(f, "Leaf(len={}) {:?}", self.len(), pairs)
     }
 }

@@ -13,7 +13,7 @@ harness = false
 [dependencies]
 sized-chunks = { path = "../sized-chunks" }
 # sized-chunks = "0.5.1"
-refpool = "0.3.1"
+refpool = "0.4.2"
 typenum = "1.12"
 
 [dev-dependencies]

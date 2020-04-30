@@ -53,7 +53,7 @@ impl<K, V> PalmTree<K, V> {
 
 impl<K, V> PalmTree<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
 {
     /// Construct a B+-tree efficiently from an ordered iterator.
     ///
@@ -145,10 +145,12 @@ where
         }
 
         // The root is now the only item left on the stack.
-        Self {
+        let mut tree = Self {
             size,
             root: stack.pop(),
-        }
+        };
+        tree.trim_root();
+        tree
     }
 
     // For benchmarking: lookup with a linear search instead of binary.
@@ -196,7 +198,22 @@ where
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let len = self.size;
         if let Some(ref mut root) = self.root {
+            // Special case: if a tree has size 0 but there is a root, it's because
+            // we removed the last entry and the root has been left allocated.
+            // Tree walking algos assume the tree has no empty nodes, so we have to
+            // handle this as a special case.
+            if len == 0 {
+                // Make sure the delete trimmed the tree properly.
+                debug_assert_eq!(0, root.len());
+                debug_assert_eq!(1, root.height());
+
+                root.push_key(key.clone());
+                root.push_leaf(Box::new(Leaf::unit(key, value)));
+                self.size = 1;
+                return None;
+            }
             match root.insert(key, value) {
                 InsertResult::Added => {
                     self.size += 1;
@@ -227,15 +244,26 @@ where
                     Some((key, value))
                 }
                 // Deallocating the root if the tree becomes empty would be memory efficient,
-                // but it would not be performance efficient, so we leave it.
+                // but it would not be performance efficient, so we trim it and leave it.
                 RemoveResult::DeletedAndEmpty(key, value) => {
                     self.size -= 1;
+                    debug_assert_eq!(0, self.size); // We shouldn't be here if the tree isn't now empty.
+                    self.trim_root();
                     Some((key, value))
                 }
                 RemoveResult::NotHere => None,
             }
         } else {
             None
+        }
+    }
+
+    fn trim_root(&mut self) {
+        if let Some(ref mut root) = self.root {
+            // If a branch bearing root only has one child, we can replace the root with that child.
+            while root.height() > 1 && root.len() == 1 {
+                *root = root.remove_last_branch();
+            }
         }
     }
 }
@@ -255,7 +283,7 @@ where
 
 impl<K, V> FromIterator<(K, V)> for PalmTree<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
 {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -306,7 +334,7 @@ mod test {
     fn load_from_ordered_stream() {
         let size = 131_072;
         let tree: PalmTree<usize, usize> = PalmTree::load((0..size).map(|i| (i, i)));
-        println!("{:?}", tree);
+        // println!("{:?}", tree);
         for i in 0..size {
             assert_eq!(Some(&i), tree.get(&i));
         }
@@ -319,5 +347,18 @@ mod test {
             assert_eq!(Some((i, i)), tree.remove(&i));
             assert_eq!(None, tree.remove(&i));
         }
+    }
+
+    #[test]
+    fn insert_into_emptied_tree() {
+        let mut tree: PalmTree<u8, u8> = PalmTree::new();
+        tree.insert(0, 0);
+        tree.remove(&0);
+        tree.insert(0, 0);
+        tree.insert(10, 10);
+
+        let result: Vec<(u8, u8)> = tree.iter().map(|(k, v)| (*k, *v)).collect();
+        let expected: Vec<(u8, u8)> = vec![(0, 0), (10, 10)];
+        assert_eq!(expected, result);
     }
 }

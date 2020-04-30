@@ -1,138 +1,25 @@
-use crate::{
-    arch::prefetch,
-    branch::Branch,
-    leaf::Leaf,
-    search::{find_key_or_next, find_key_or_prev},
-    PalmTree,
-};
+use crate::{search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
     ops::{Bound, RangeBounds},
 };
 
-
-/// Find the path to the leaf which contains `key` or the closest higher key.
-fn path_for<'a, K, V>(
-    tree: &'a Branch<K, V>,
-    key: &K,
-) -> Option<(Vec<(&'a Branch<K, V>, isize)>, &'a Leaf<K, V>)>
-where
-    K: Clone + Ord,
-{
-    let mut path = Vec::new();
-    if let Some(leaf) = tree.leaf_for(key, Some(&mut path)) {
-        Some((path, leaf))
-    } else {
-        None
-    }
-}
-
-/// Step a stack forward by one entry.
-///
-/// If it returns `false`, you tried to step past the last entry. The stack
-/// will be in an inconsistent state at this point and you should either panic
-/// or discard it.
-fn step_forward<'a, K, V>(
-    stack: &mut Vec<(&'a Branch<K, V>, isize)>,
-    leaf_ref: &mut Option<&'a Leaf<K, V>>,
-    index_ref: &mut usize,
-) -> bool {
-    if let Some(leaf) = leaf_ref {
-        *index_ref += 1;
-        if *index_ref >= leaf.keys.len() {
-            loop {
-                // Pop a branch off the top of the stack and examine it.
-                if let Some((branch, mut index)) = stack.pop() {
-                    index += 1;
-                    if index < branch.len() as isize {
-                        // If we're not at the end yet, push the branch back on the stack and look at the next child.
-                        stack.push((branch, index));
-                        if branch.has_branches() {
-                            // If it's a branch, push it on the stack and go through the loop again with this branch.
-                            stack.push((branch.get_branch(index as usize), -1));
-                            continue;
-                        } else {
-                            // If it's a leaf, this is our new leaf, we're done.
-                            *leaf_ref = Some(branch.get_leaf(index as usize));
-                            *index_ref = 0;
-                            // Prefetch the next leaf.
-                            let next_index = (index + 1) as usize;
-                            if next_index < branch.len() {
-                                unsafe { prefetch(branch.get_leaf(next_index)) };
-                            }
-                            break;
-                        }
-                    } else {
-                        // If this branch is exhausted, go round the loop again to look at its parent.
-                        continue;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-    }
-    true
-}
-
-/// Step a stack back by one entry.
-///
-/// See notes for `step_forward`.
-fn step_back<'a, K, V>(
-    stack: &mut Vec<(&'a Branch<K, V>, isize)>,
-    leaf_ref: &mut Option<&'a Leaf<K, V>>,
-    index_ref: &mut usize,
-) -> bool {
-    if leaf_ref.is_some() {
-        if *index_ref > 0 {
-            *index_ref -= 1;
-        } else {
-            loop {
-                // Pop a branch off the top of the stack and examine it.
-                if let Some((branch, mut index)) = stack.pop() {
-                    if index > 0 {
-                        index -= 1;
-                        // If we're not at the end yet, push the branch back on the stack and look at the next child.
-                        stack.push((branch, index));
-                        if branch.has_branches() {
-                            let child = branch.get_branch(index as usize);
-                            // If it's a branch, push it on the stack and go through the loop again with this branch.
-                            stack.push((child, child.len() as isize));
-                            continue;
-                        } else {
-                            let leaf = branch.get_leaf(index as usize);
-                            // If it's a leaf, this is our new leaf, we're done.
-                            *leaf_ref = Some(leaf);
-                            *index_ref = leaf.keys.len() - 1;
-                            break;
-                        }
-                    } else {
-                        // If this branch is exhausted, go round the loop again to look at its parent.
-                        continue;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-    }
-    true
-}
-
 pub struct PalmTreeIter<'a, K, V> {
-    left_stack: Vec<(&'a Branch<K, V>, isize)>,
-    left_leaf: Option<&'a Leaf<K, V>>,
-    left_index: usize,
-
-    right_stack: Vec<(&'a Branch<K, V>, isize)>,
-    right_leaf: Option<&'a Leaf<K, V>>,
-    right_index: usize,
+    left: PathedPointer<'a, K, V>,
+    right: PathedPointer<'a, K, V>,
 }
 
 impl<'a, K, V> PalmTreeIter<'a, K, V>
 where
     K: Clone + Ord,
 {
+    fn null() -> Self {
+        Self {
+            left: PathedPointer::null(),
+            right: PathedPointer::null(),
+        }
+    }
+
     pub(crate) fn new<R>(tree: &'a PalmTree<K, V>, range: R) -> Self
     where
         R: RangeBounds<K>,
@@ -152,145 +39,42 @@ where
             _ => {}
         }
 
+        let left;
+        let right;
+
         if let Some(ref tree) = tree.root {
-            let mut left_stack;
-            let mut left_leaf;
-            let mut left_index;
-            match range.start_bound() {
-                Bound::Included(key) => {
-                    if let Some((path, target_leaf)) = path_for(tree, key) {
-                        left_stack = path;
-                        left_index = find_key_or_next(&target_leaf.keys, key);
-                        left_leaf = Some(target_leaf);
-                    } else {
-                        // No target node for start bound, so it must be larger than the largest key; that's an empty iter.
-                        left_stack = Vec::new();
-                        left_index = 0;
-                        left_leaf = None;
-                    }
-                }
-                Bound::Excluded(key) => {
-                    if let Some((path, target_leaf)) = path_for(tree, key) {
-                        left_stack = path;
-                        left_index = find_key_or_next(&target_leaf.keys, key);
-                        left_leaf = Some(target_leaf);
-                        if &target_leaf.keys[left_index] == key {
-                            if !step_forward(&mut left_stack, &mut left_leaf, &mut left_index) {
-                                // If we can't step forward, we were at the highest key already, so the iterator is empty.
-                                left_stack = Vec::new();
-                                left_index = 0;
-                                left_leaf = None;
-                            }
-                        }
-                    } else {
-                        // No target node for start bound, so it must be larger than the largest key; that's an empty iter.
-                        left_stack = Vec::new();
-                        left_index = 0;
-                        left_leaf = None;
-                    }
-                }
-                Bound::Unbounded => {
-                    let (stack, leaf, index) = tree.start_path();
-                    left_stack = stack;
-                    left_leaf = leaf;
-                    left_index = index;
-                }
+            left = match range.start_bound() {
+                Bound::Included(key) => PathedPointer::key_or_higher(tree, key),
+                Bound::Excluded(key) => PathedPointer::higher_than_key(tree, key),
+                Bound::Unbounded => PathedPointer::lowest(tree),
+            };
+            if left.is_null() {
+                return Self::null();
             }
 
-            let mut right_stack;
-            let mut right_leaf;
-            let mut right_index;
-            match range.end_bound() {
-                Bound::Included(key) => {
-                    if let Some((path, target_leaf)) = path_for(tree, key) {
-                        right_stack = path;
-                        right_index = find_key_or_prev(&target_leaf.keys, key);
-                        right_leaf = Some(target_leaf);
-                    } else {
-                        // No target node for end bound, so it must be larger than the largest key; get the path to that.
-                        let (stack, leaf, index) = tree.end_path();
-                        right_stack = stack;
-                        right_leaf = leaf;
-                        right_index = index;
-                    }
-                }
-                Bound::Excluded(key) => {
-                    if let Some((path, target_leaf)) = path_for(tree, key) {
-                        right_stack = path;
-                        right_index = find_key_or_prev(&target_leaf.keys, key);
-                        right_leaf = Some(target_leaf);
-                        if &target_leaf.keys[right_index] == key {
-                            if !step_back(&mut right_stack, &mut right_leaf, &mut right_index) {
-                                // If we can't step back, we were at the lowest key already, so the iterator is empty.
-                                right_stack = Vec::new();
-                                right_index = 0;
-                                right_leaf = None;
-                            }
-                        } else if &target_leaf.keys[right_index] > key {
-                            right_stack = Vec::new();
-                            right_index = 0;
-                            right_leaf = None;
-                        }
-                    } else {
-                        // No target node for end bound, so it must be larger than the largest key; get the path to that.
-                        let (stack, leaf, index) = tree.end_path();
-                        right_stack = stack;
-                        right_leaf = leaf;
-                        right_index = index;
-                    }
-                }
-                Bound::Unbounded => {
-                    let (stack, leaf, index) = tree.end_path();
-                    right_stack = stack;
-                    right_leaf = leaf;
-                    right_index = index;
-                }
+            right = match range.end_bound() {
+                Bound::Included(key) => PathedPointer::key_or_lower(tree, key),
+                Bound::Excluded(key) => PathedPointer::lower_than_key(tree, key),
+                Bound::Unbounded => PathedPointer::highest(tree),
+            };
+            if right.is_null() {
+                return Self::null();
             }
 
-            Self {
-                left_stack,
-                left_leaf,
-                left_index,
-                right_stack,
-                right_leaf,
-                right_index,
-            }
+            Self { left, right }
         } else {
             // Tree has no root, iterator is empty.
-            Self {
-                left_stack: Vec::new(),
-                left_leaf: None,
-                left_index: 0,
-                right_stack: Vec::new(),
-                right_leaf: None,
-                right_index: 0,
-            }
+            Self::null()
         }
     }
 
-    fn left_key(&self) -> Option<&'a K> {
-        self.left_leaf.map(|leaf| &leaf.keys[self.left_index])
-    }
-
-    fn right_key(&self) -> Option<&'a K> {
-        self.right_leaf.map(|leaf| &leaf.keys[self.right_index])
-    }
-
     fn step_forward(&mut self) {
-        let result = step_forward(
-            &mut self.left_stack,
-            &mut self.left_leaf,
-            &mut self.left_index,
-        );
+        let result = self.left.step_forward();
         debug_assert!(result);
     }
 
     fn step_back(&mut self) {
-        let result = step_back(
-            &mut self.right_stack,
-            &mut self.right_leaf,
-            &mut self.right_index,
-        );
+        let result = self.right.step_back();
         debug_assert!(result);
     }
 }
@@ -301,19 +85,19 @@ where
 {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
-        let left_key = self.left_key()?;
-        let right_key = self.right_key()?;
+        let left_key = self.left.key()?;
+        let right_key = self.right.key()?;
         // If left key is greather than right key, we're done.
         let cmp = left_key.cmp(right_key);
         if cmp == Ordering::Greater {
-            self.left_leaf = None;
-            self.right_leaf = None;
+            self.left.clear();
+            self.right.clear();
             return None;
         }
-        let value = &self.left_leaf.unwrap().values[self.left_index];
+        let value = self.left.value().unwrap();
         if cmp == Ordering::Equal {
-            self.left_leaf = None;
-            self.right_leaf = None;
+            self.left.clear();
+            self.right.clear();
         } else {
             self.step_forward();
         }
@@ -326,19 +110,19 @@ where
     K: Clone + Ord,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let left_key = self.left_key()?;
-        let right_key = self.right_key()?;
+        let left_key = self.left.key()?;
+        let right_key = self.right.key()?;
         // If left key is greather than right key, we're done.
         let cmp = left_key.cmp(right_key);
         if cmp == Ordering::Greater {
-            self.left_leaf = None;
-            self.right_leaf = None;
+            self.left.clear();
+            self.right.clear();
             return None;
         }
-        let value = &self.right_leaf.unwrap().values[self.right_index];
+        let value = self.right.value().unwrap();
         if cmp == Ordering::Equal {
-            self.left_leaf = None;
-            self.right_leaf = None;
+            self.left.clear();
+            self.right.clear();
         } else {
             self.step_back();
         }
@@ -434,6 +218,115 @@ mod test {
         let tree = PalmTree::load((0..2usize).map(|i| (i, i)));
         let expected: Vec<(usize, usize)> = vec![(0, 0)];
         let result: Vec<_> = tree.range(..=0).map(|(k, v)| (*k, *v)).collect();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn range_with_deleted_max() {
+        let mut tree: PalmTree<u8, u8> = PalmTree::new();
+        tree.insert(0, 0);
+        tree.insert(1, 136);
+        tree.remove(&1);
+
+        // println!("{:?}", tree);
+
+        let result: Vec<(u8, u8)> = tree.range(1..2).map(|(k, v)| (*k, *v)).collect();
+        let expected: Vec<(u8, u8)> = vec![];
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn iterate_over_emptied_tree() {
+        let mut tree: PalmTree<u8, u8> = PalmTree::new();
+        tree.insert(0, 0);
+        tree.remove(&0);
+        let result: Vec<(u8, u8)> = tree.iter().map(|(k, v)| (*k, *v)).collect();
+        let expected: Vec<(u8, u8)> = vec![];
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn closing_bound_lies_past_target_leaf() {
+        // This test has two leaves, and the closing bound for the iterator lies exactly between them.
+        // Left leaf has max key 251, right leaf has min key 254, bound is 253.
+        let input = vec![
+            (0, 171),
+            (1, 248),
+            (5, 189),
+            (7, 122),
+            (8, 189),
+            (9, 11),
+            (10, 165),
+            (11, 215),
+            (13, 243),
+            (15, 0),
+            (17, 0),
+            (21, 245),
+            (24, 5),
+            (30, 0),
+            (31, 255),
+            (32, 10),
+            (35, 0),
+            (41, 255),
+            (52, 82),
+            (54, 28),
+            (58, 0),
+            (59, 255),
+            (61, 11),
+            (64, 238),
+            (78, 59),
+            (80, 255),
+            (82, 82),
+            (85, 238),
+            (91, 91),
+            (93, 243),
+            (104, 115),
+            (115, 115),
+            (121, 121),
+            (122, 255),
+            (124, 10),
+            (126, 251),
+            (127, 85),
+            (131, 131),
+            (133, 115),
+            (135, 0),
+            (138, 126),
+            (142, 238),
+            (148, 158),
+            (152, 242),
+            (158, 138),
+            (164, 0),
+            (166, 164),
+            (170, 170),
+            (177, 78),
+            (184, 17),
+            (189, 255),
+            (202, 54),
+            (213, 215),
+            (215, 50),
+            (219, 255),
+            (227, 164),
+            (238, 246),
+            (242, 18),
+            (243, 242),
+            (245, 243),
+            (246, 127),
+            (248, 170),
+            (249, 255),
+            (251, 184),
+            (254, 242),
+            (255, 54),
+        ];
+        let tree: PalmTree<u8, u8> = PalmTree::load(input.clone().into_iter());
+
+        // println!("{:?}", tree);
+
+        let result: Vec<(u8, u8)> = tree.range(..253).map(|(k, v)| (*k, *v)).collect();
+        let expected: Vec<(u8, u8)> = input
+            .clone()
+            .into_iter()
+            .filter(|(k, _)| k < &253)
+            .collect();
         assert_eq!(expected, result);
     }
 }
