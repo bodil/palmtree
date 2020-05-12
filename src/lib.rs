@@ -63,7 +63,7 @@ where
     /// This algorithm requires the results coming out of the iterator
     /// to be in sorted order, with no duplicate keys, or the resulting
     /// tree will be in a very bad state. In debug mode, this invariant
-    /// will be validated.
+    /// will be validated and panic ensues if it isn't held.
     pub fn load<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -264,7 +264,7 @@ where
     fn trim_root(&mut self) {
         if let Some(ref mut root) = self.root {
             // If a branch bearing root only has one child, we can replace the root with that child.
-            while root.height() > 1 && root.len() == 1 {
+            while root.has_branches() && root.len() == 1 {
                 *root = root.remove_last_branch();
             }
         }

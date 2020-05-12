@@ -211,7 +211,7 @@ where
                 return Self::null();
             }
             stack.push_back((branch, 0));
-            if branch.height() > 1 {
+            if branch.has_branches() {
                 branch = branch.get_branch(0);
             } else {
                 return Self {
@@ -233,7 +233,7 @@ where
             }
             let index = branch.len() - 1;
             stack.push_back((branch, index as isize));
-            if branch.height() > 1 {
+            if branch.has_branches() {
                 branch = branch.get_branch(index);
             } else {
                 let leaf = branch.get_leaf(index);
