@@ -10,14 +10,20 @@ build = "build.rs"
 name = "palmtree"
 harness = false
 
+[features]
+test = ["arbitrary"]
+
 [dependencies]
 sized-chunks = "0.6.1"
 refpool = "0.4.2"
 typenum = "1.12"
+arbitrary = { version = "0.4", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.3"
 rand = "0.7"
+proptest = "0.9"
+proptest-derive = "0.1"
 
 [build-dependencies]
 version_check = "0.9.1"

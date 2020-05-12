@@ -31,6 +31,9 @@ mod iter;
 use iter::PalmTreeIter;
 use types::{InsertResult, RemoveResult};
 
+#[cfg(any(test, feature = "test"))]
+pub mod tests;
+
 pub struct PalmTree<K, V> {
     size: usize,
     root: Option<Box<Branch<K, V>>>,
