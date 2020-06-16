@@ -104,6 +104,19 @@ pub(crate) struct PathedPointer<'a, K, V> {
     index: usize,
 }
 
+impl<'a, K, V> Clone for PathedPointer<'a, K, V>
+where
+    K: Clone + Ord,
+{
+    fn clone(&self) -> Self {
+        Self {
+            stack: self.stack.clone(),
+            leaf: self.leaf.clone(),
+            index: self.index,
+        }
+    }
+}
+
 /// Find the path to the leaf which contains `key` or the closest higher key.
 fn path_for<'a, K, V>(tree: &'a Branch<K, V>, key: &K) -> Option<(Path<'a, K, V>, &'a Leaf<K, V>)>
 where

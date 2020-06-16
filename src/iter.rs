@@ -1,12 +1,25 @@
 use crate::{search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
+    fmt::{Debug, Error, Formatter},
     ops::{Bound, RangeBounds},
 };
 
 pub struct PalmTreeIter<'a, K, V> {
     left: PathedPointer<'a, K, V>,
     right: PathedPointer<'a, K, V>,
+}
+
+impl<'a, K, V> Clone for PalmTreeIter<'a, K, V>
+where
+    K: Clone + Ord,
+{
+    fn clone(&self) -> Self {
+        Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
+        }
+    }
 }
 
 impl<'a, K, V> PalmTreeIter<'a, K, V>
@@ -127,6 +140,16 @@ where
             self.step_back();
         }
         Some((right_key, value))
+    }
+}
+
+impl<'a, K, V> Debug for PalmTreeIter<'a, K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.debug_map().entries(self.clone()).finish()
     }
 }
 

@@ -6,14 +6,20 @@
 #![deny(nonstandard_style)]
 #![warn(
     unreachable_pub,
-    // missing_debug_implementations,
+    missing_debug_implementations,
     // missing_docs,
-    // missing_doc_code_examples
+    missing_doc_code_examples
 )]
 #![cfg_attr(core_intrinsics, feature(core_intrinsics))]
 
 use std::fmt::{Debug, Error, Formatter};
-use std::{iter::FromIterator, ops::RangeBounds};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    hash::{Hash, Hasher},
+    iter::FromIterator,
+    ops::{Index, IndexMut, RangeBounds},
+};
 
 pub mod asmtest;
 
@@ -233,7 +239,7 @@ where
                 }
             }
         } else {
-            self.root = Some(Box::new(Branch::unit(1, Box::new(Leaf::unit(key, value)))));
+            self.root = Some(Box::new(Branch::unit(Box::new(Leaf::unit(key, value)))));
             self.size = 1;
             None
         }
@@ -271,6 +277,7 @@ where
     }
 }
 
+#[cfg(feature = "tree_debug")]
 impl<K, V> Debug for PalmTree<K, V>
 where
     K: Debug,
@@ -281,6 +288,17 @@ where
             None => write!(f, "EmptyTree"),
             Some(root) => root.fmt(f),
         }
+    }
+}
+
+#[cfg(not(feature = "tree_debug"))]
+impl<K, V> Debug for PalmTree<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
@@ -297,6 +315,121 @@ where
             out.insert(key, value);
         }
         out
+    }
+}
+
+impl<'a, K, V> Index<&'a K> for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    type Output = V;
+
+    fn index(&self, index: &K) -> &Self::Output {
+        self.get(index).expect("no entry found for key")
+    }
+}
+
+impl<'a, K, V> IndexMut<&'a K> for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    fn index_mut(&mut self, index: &K) -> &mut Self::Output {
+        self.get_mut(index).expect("no entry found for key")
+    }
+}
+
+impl<K, V> PartialEq for PalmTree<K, V>
+where
+    K: Ord + Clone,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl<K, V> Eq for PalmTree<K, V>
+where
+    K: Ord + Clone,
+    V: Eq,
+{
+}
+
+impl<K, V> PartialOrd for PalmTree<K, V>
+where
+    K: Ord + Clone,
+    V: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<K, V> Ord for PalmTree<K, V>
+where
+    K: Ord + Clone,
+    V: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl<K, V> Extend<(K, V)> for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
+    }
+}
+
+impl<'a, K, V> Extend<(&'a K, &'a V)> for PalmTree<K, V>
+where
+    K: 'a + Ord + Clone,
+    V: 'a + Clone,
+{
+    fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+impl<K, V> Hash for PalmTree<K, V>
+where
+    K: Ord + Clone + Hash,
+    V: Hash,
+{
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        for entry in self {
+            entry.hash(state);
+        }
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = PalmTreeIter<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<K, V> From<BTreeMap<K, V>> for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    fn from(map: BTreeMap<K, V>) -> Self {
+        Self::load(map.into_iter())
     }
 }
 
