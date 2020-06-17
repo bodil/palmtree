@@ -212,6 +212,13 @@ where
         Iter::new(self, range)
     }
 
+    pub fn range_mut<R>(&mut self, range: R) -> IterMut<'_, K, V>
+    where
+        R: RangeBounds<K>,
+    {
+        IterMut::new(self, range)
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let len = self.size;
         if let Some(ref mut root) = self.root {
