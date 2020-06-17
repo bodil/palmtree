@@ -39,6 +39,10 @@ impl<K, V> Leaf<K, V> {
         self.keys.last().unwrap()
     }
 
+    pub(crate) fn keys(&self) -> &[K] {
+        &self.keys
+    }
+
     pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V>>, Box<Leaf<K, V>>) {
         let half = self.keys.len() / 2;
         let left = Box::new(Leaf {
@@ -107,6 +111,34 @@ where
                 }
             }
             Err(_) => RemoveResult::NotHere,
+        }
+    }
+
+    pub(crate) fn remove_lowest(&mut self) -> RemoveResult<K, V> {
+        if self.is_empty() {
+            RemoveResult::NotHere
+        } else {
+            let key = self.keys.pop_front();
+            let value = self.values.pop_front();
+            if self.is_empty() {
+                RemoveResult::DeletedAndEmpty(key, value)
+            } else {
+                RemoveResult::Deleted(key, value)
+            }
+        }
+    }
+
+    pub(crate) fn remove_highest(&mut self) -> RemoveResult<K, V> {
+        if self.is_empty() {
+            RemoveResult::NotHere
+        } else {
+            let key = self.keys.pop_back();
+            let value = self.values.pop_back();
+            if self.is_empty() {
+                RemoveResult::DeletedAndEmpty(key, value)
+            } else {
+                RemoveResult::Deleted(key, value)
+            }
         }
     }
 }

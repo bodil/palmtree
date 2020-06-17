@@ -28,14 +28,16 @@ mod search;
 mod types;
 
 mod leaf;
-use leaf::Leaf;
 
 mod branch;
-use branch::Branch;
 
 mod iter;
-use iter::PalmTreeIter;
+
+use branch::Branch;
+use leaf::Leaf;
 use types::{InsertResult, RemoveResult};
+
+pub use iter::{Iter, IterMut, MergeIter, OwnedIter};
 
 #[cfg(any(test, feature = "test"))]
 pub mod tests;
@@ -195,15 +197,19 @@ where
         self.len() == 0
     }
 
-    pub fn iter(&self) -> PalmTreeIter<'_, K, V> {
-        PalmTreeIter::new(self, ..)
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter::new(self, ..)
     }
 
-    pub fn range<R>(&self, range: R) -> PalmTreeIter<'_, K, V>
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+        IterMut::new(self, ..)
+    }
+
+    pub fn range<R>(&self, range: R) -> Iter<'_, K, V>
     where
         R: RangeBounds<K>,
     {
-        PalmTreeIter::new(self, range)
+        Iter::new(self, range)
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -245,26 +251,53 @@ where
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
-        if let Some(ref mut root) = self.root {
-            match root.remove(key) {
-                RemoveResult::Deleted(key, value) => {
-                    self.size -= 1;
-                    Some((key, value))
-                }
-                // Deallocating the root if the tree becomes empty would be memory efficient,
-                // but it would not be performance efficient, so we trim it and leave it.
-                RemoveResult::DeletedAndEmpty(key, value) => {
-                    self.size -= 1;
-                    debug_assert_eq!(0, self.size); // We shouldn't be here if the tree isn't now empty.
-                    self.trim_root();
-                    Some((key, value))
-                }
-                RemoveResult::NotHere => None,
+    fn remove_result(&mut self, result: RemoveResult<K, V>) -> Option<(K, V)> {
+        match result {
+            RemoveResult::Deleted(key, value) => {
+                self.size -= 1;
+                Some((key, value))
             }
-        } else {
-            None
+            // Deallocating the root if the tree becomes empty would be memory efficient,
+            // but it would not be performance efficient, so we trim it and leave it.
+            RemoveResult::DeletedAndEmpty(key, value) => {
+                self.size -= 1;
+                debug_assert_eq!(0, self.size); // We shouldn't be here if the tree isn't now empty.
+                self.trim_root();
+                Some((key, value))
+            }
+            RemoveResult::NotHere => None,
         }
+    }
+
+    pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
+        let result = self.root.as_mut()?.remove(key);
+        self.remove_result(result)
+    }
+
+    pub fn remove_lowest(&mut self) -> Option<(K, V)> {
+        let result = self.root.as_mut()?.remove_lowest();
+        self.remove_result(result)
+    }
+
+    pub fn remove_highest(&mut self) -> Option<(K, V)> {
+        let result = self.root.as_mut()?.remove_highest();
+        self.remove_result(result)
+    }
+
+    pub fn merge_left(left: Self, right: Self) -> Self {
+        Self::load(MergeIter::merge(
+            left.into_iter(),
+            right.into_iter(),
+            |(left, _), (right, _)| left > right,
+        ))
+    }
+
+    pub fn merge_right(left: Self, right: Self) -> Self {
+        Self::load(MergeIter::merge(
+            left.into_iter(),
+            right.into_iter(),
+            |(left, _), (right, _)| left >= right,
+        ))
     }
 
     fn trim_root(&mut self) {
@@ -418,9 +451,31 @@ where
     K: Ord + Clone,
 {
     type Item = (&'a K, &'a V);
-    type IntoIter = PalmTreeIter<'a, K, V>;
+    type IntoIter = Iter<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a mut PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<K, V> IntoIterator for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    type Item = (K, V);
+    type IntoIter = OwnedIter<K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        OwnedIter::new(self)
     }
 }
 

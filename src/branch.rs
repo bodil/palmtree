@@ -1,7 +1,7 @@
 use crate::{
     leaf::Leaf,
     search::{find_key, find_key_linear},
-    types::{InsertResult, MaxHeight, NodeSize, Path, PathMut, RemoveResult},
+    types::{InsertResult, MaxHeight, NodeSize, RemoveResult},
 };
 use node::Node;
 use sized_chunks::Chunk;
@@ -70,6 +70,10 @@ impl<K, V> Branch<K, V> {
 
     pub(crate) fn height(&self) -> usize {
         self.height
+    }
+
+    pub(crate) fn keys(&self) -> &[K] {
+        &self.keys
     }
 
     pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V> {
@@ -185,70 +189,16 @@ where
     }
 
     pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        self.leaf_for_mut(key, None)
-            .and_then(|leaf| leaf.get_mut(key))
-    }
-
-    /// Find the closest leaf for key `K`.
-    ///
-    /// The leaf found is the closest one to the key, such that the lowest key in the leaf is guaranteed
-    /// to be less than or equal to `K`, or to be the lowest key in the set, and the highest key is guaranteed
-    /// to be greater than or equal to `K`. It is not guaranteed to contain `K`, but it's guaranteed to
-    /// be where `K` would be if it's in the set.
-    ///
-    /// It may return `None`, which means the highest key in the set is lower than `K`, or the set is empty.
-    ///
-    /// If you provide the `path` argument, the branches walked to get to the leaf will be pushed to it in order,
-    /// starting with the root.
-    #[inline]
-    pub(crate) fn leaf_for<'a>(
-        &'a self,
-        key: &K,
-        mut path: Option<&mut Path<'a, K, V>>,
-    ) -> Option<&'a Leaf<K, V>> {
-        let mut branch = self;
-
-        loop {
-            if branch.is_empty() {
-                return None;
-            }
-            if let Some(index) = find_key(&branch.keys, key) {
-                if let Some(ref mut path) = path {
-                    path.push_back((&*branch, index as isize));
-                }
-                if branch.height > 1 {
-                    branch = branch.get_branch(index);
-                } else {
-                    return Some(branch.get_leaf(index));
-                }
-            } else {
-                return None;
-            }
-        }
-    }
-
-    /// Find the closest leaf for key `K` as a mutable reference.
-    ///
-    /// See `leaf_for` for details.
-    #[inline]
-    pub(crate) fn leaf_for_mut<'a>(
-        &'a mut self,
-        key: &K,
-        mut path: Option<&mut PathMut<K, V>>,
-    ) -> Option<&'a mut Leaf<K, V>> {
         let mut branch = self;
         loop {
             if branch.is_empty() {
                 return None;
             }
             if let Some(index) = find_key(&branch.keys, key) {
-                if let Some(ref mut path) = path {
-                    path.push_back((&mut *branch, index));
-                }
                 if branch.height > 1 {
                     branch = branch.get_branch_mut(index);
                 } else {
-                    return Some(branch.get_leaf_mut(index));
+                    return branch.get_leaf_mut(index).get_mut(key);
                 }
             } else {
                 return None;
@@ -328,6 +278,25 @@ where
         }
     }
 
+    fn remove_result(&mut self, index: usize, result: RemoveResult<K, V>) -> RemoveResult<K, V> {
+        match result {
+            RemoveResult::DeletedAndEmpty(key, value) => {
+                self.keys.remove(index);
+                if self.has_branches() {
+                    self.remove_branch(index);
+                } else {
+                    self.remove_leaf(index);
+                }
+                if self.is_empty() {
+                    RemoveResult::DeletedAndEmpty(key, value)
+                } else {
+                    RemoveResult::Deleted(key, value)
+                }
+            }
+            result => result,
+        }
+    }
+
     pub(crate) fn remove(&mut self, key: &K) -> RemoveResult<K, V> {
         // BIG TODO:
         // This implementation doesn't deal with underfull nodes, on the theory that the tree
@@ -342,24 +311,29 @@ where
             } else {
                 self.get_leaf_mut(index).remove(key)
             };
-            match result {
-                RemoveResult::DeletedAndEmpty(key, value) => {
-                    self.keys.remove(index);
-                    if self.has_branches() {
-                        self.remove_branch(index);
-                    } else {
-                        self.remove_leaf(index);
-                    }
-                    if self.is_empty() {
-                        RemoveResult::DeletedAndEmpty(key, value)
-                    } else {
-                        RemoveResult::Deleted(key, value)
-                    }
-                }
-                result => result,
-            }
+            self.remove_result(index, result)
         } else {
             RemoveResult::NotHere
+        }
+    }
+
+    pub(crate) fn remove_lowest(&mut self) -> RemoveResult<K, V> {
+        if self.is_empty() {
+            RemoveResult::NotHere
+        } else {
+            let result = self.get_leaf_mut(0).remove_lowest();
+            self.remove_result(0, result)
+        }
+    }
+
+    pub(crate) fn remove_highest(&mut self) -> RemoveResult<K, V> {
+        let len = self.len();
+        if len == 0 {
+            RemoveResult::NotHere
+        } else {
+            let index = len - 1;
+            let result = self.get_leaf_mut(index).remove_highest();
+            self.remove_result(index, result)
         }
     }
 }

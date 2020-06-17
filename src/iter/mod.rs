@@ -1,161 +1,88 @@
+#![allow(unreachable_pub)] // pub exports below erroneously complain without this
+
 use crate::{search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
-    fmt::{Debug, Error, Formatter},
     ops::{Bound, RangeBounds},
 };
 
-pub struct PalmTreeIter<'a, K, V> {
-    left: PathedPointer<'a, K, V>,
-    right: PathedPointer<'a, K, V>,
-}
+mod ref_iter;
+pub use ref_iter::Iter;
 
-impl<'a, K, V> Clone for PalmTreeIter<'a, K, V>
+mod mut_iter;
+pub use mut_iter::IterMut;
+
+mod owned;
+pub use owned::OwnedIter;
+
+mod merge;
+pub use merge::MergeIter;
+
+fn paths_from_range<'a, L, K, V, R>(
+    tree: &'a PalmTree<K, V>,
+    range: R,
+) -> Option<(PathedPointer<L, K, V>, PathedPointer<L, K, V>)>
 where
     K: Clone + Ord,
+    R: RangeBounds<K>,
 {
-    fn clone(&self) -> Self {
-        Self {
-            left: self.left.clone(),
-            right: self.right.clone(),
+    match (range.start_bound(), range.end_bound()) {
+        (Bound::Excluded(left), Bound::Excluded(right)) if left == right => {
+            panic!("PalmTreeIter: start and end bounds are equal and excluding each other")
         }
-    }
-}
-
-impl<'a, K, V> PalmTreeIter<'a, K, V>
-where
-    K: Clone + Ord,
-{
-    fn null() -> Self {
-        Self {
-            left: PathedPointer::null(),
-            right: PathedPointer::null(),
+        (Bound::Included(left), Bound::Included(right))
+        | (Bound::Included(left), Bound::Excluded(right))
+        | (Bound::Excluded(left), Bound::Included(right))
+        | (Bound::Excluded(left), Bound::Excluded(right))
+            if left.cmp(right) == Ordering::Greater =>
+        {
+            panic!("PalmTreeIter: range start is greater than range end");
         }
+        _ => {}
     }
 
-    pub(crate) fn new<R>(tree: &'a PalmTree<K, V>, range: R) -> Self
-    where
-        R: RangeBounds<K>,
-    {
-        match (range.start_bound(), range.end_bound()) {
-            (Bound::Excluded(left), Bound::Excluded(right)) if left == right => {
-                panic!("PalmTreeIter: start and end bounds are equal and excluding each other")
-            }
-            (Bound::Included(left), Bound::Included(right))
-            | (Bound::Included(left), Bound::Excluded(right))
-            | (Bound::Excluded(left), Bound::Included(right))
-            | (Bound::Excluded(left), Bound::Excluded(right))
-                if left.cmp(right) == Ordering::Greater =>
-            {
-                panic!("PalmTreeIter: range start is greater than range end");
-            }
-            _ => {}
-        }
+    let left;
+    let right;
 
-        let left;
-        let right;
-
-        if let Some(ref tree) = tree.root {
-            left = match range.start_bound() {
-                Bound::Included(key) => PathedPointer::key_or_higher(tree, key),
-                Bound::Excluded(key) => PathedPointer::higher_than_key(tree, key),
-                Bound::Unbounded => PathedPointer::lowest(tree),
-            };
-            if left.is_null() {
-                return Self::null();
-            }
-
-            right = match range.end_bound() {
-                Bound::Included(key) => PathedPointer::key_or_lower(tree, key),
-                Bound::Excluded(key) => PathedPointer::lower_than_key(tree, key),
-                Bound::Unbounded => PathedPointer::highest(tree),
-            };
-            if right.is_null() {
-                return Self::null();
-            }
-
-            Self { left, right }
-        } else {
-            // Tree has no root, iterator is empty.
-            Self::null()
-        }
-    }
-
-    fn step_forward(&mut self) {
-        let result = self.left.step_forward();
-        debug_assert!(result);
-    }
-
-    fn step_back(&mut self) {
-        let result = self.right.step_back();
-        debug_assert!(result);
-    }
-}
-
-impl<'a, K, V> Iterator for PalmTreeIter<'a, K, V>
-where
-    K: Clone + Ord,
-{
-    type Item = (&'a K, &'a V);
-    fn next(&mut self) -> Option<Self::Item> {
-        let left_key = self.left.key()?;
-        let right_key = self.right.key()?;
-        // If left key is greather than right key, we're done.
-        let cmp = left_key.cmp(right_key);
-        if cmp == Ordering::Greater {
-            self.left.clear();
-            self.right.clear();
+    if let Some(ref tree) = tree.root {
+        left = match range.start_bound() {
+            Bound::Included(key) => PathedPointer::key_or_higher(tree, key),
+            Bound::Excluded(key) => PathedPointer::higher_than_key(tree, key),
+            Bound::Unbounded => PathedPointer::lowest(tree),
+        };
+        if left.is_null() {
             return None;
         }
-        let value = self.left.value().unwrap();
-        if cmp == Ordering::Equal {
-            self.left.clear();
-            self.right.clear();
-        } else {
-            self.step_forward();
-        }
-        Some((left_key, value))
-    }
-}
 
-impl<'a, K, V> DoubleEndedIterator for PalmTreeIter<'a, K, V>
-where
-    K: Clone + Ord,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        let left_key = self.left.key()?;
-        let right_key = self.right.key()?;
-        // If left key is greather than right key, we're done.
-        let cmp = left_key.cmp(right_key);
-        if cmp == Ordering::Greater {
-            self.left.clear();
-            self.right.clear();
+        right = match range.end_bound() {
+            Bound::Included(key) => PathedPointer::key_or_lower(tree, key),
+            Bound::Excluded(key) => PathedPointer::lower_than_key(tree, key),
+            Bound::Unbounded => PathedPointer::highest(tree),
+        };
+        if right.is_null() {
             return None;
         }
-        let value = self.right.value().unwrap();
-        if cmp == Ordering::Equal {
-            self.left.clear();
-            self.right.clear();
-        } else {
-            self.step_back();
-        }
-        Some((right_key, value))
-    }
-}
 
-impl<'a, K, V> Debug for PalmTreeIter<'a, K, V>
-where
-    K: Clone + Ord + Debug,
-    V: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        f.debug_map().entries(self.clone()).finish()
+        Some((left, right))
+    } else {
+        // Tree has no root, iterator is empty.
+        None
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn consuming_iter() {
+        let size = 65536usize;
+        let tree = PalmTree::load((0..size).map(|i| (i, i)));
+        for (index, (k, v)) in tree.into_iter().enumerate() {
+            assert_eq!(index, k);
+            assert_eq!(index, v);
+        }
+    }
 
     #[test]
     fn iterate_single_leaf() {

@@ -234,6 +234,36 @@ fn iterate(c: &mut Criterion) {
     group.finish();
 }
 
+fn iterate_owned(c: &mut Criterion) {
+    let mut group = c.benchmark_group("iterate_owned");
+    for size in SIZES {
+        group.throughput(Throughput::Elements(*size as u64));
+        group.bench_with_input(BenchmarkId::new("std::btree", size), size, |b, &size| {
+            b.iter_batched(
+                || BTreeMap::<usize, usize>::from_iter((0..size).map(|i| (i, i))),
+                |map| {
+                    for entry in map {
+                        black_box(entry);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+        group.bench_with_input(BenchmarkId::new("b+tree", size), size, |b, &size| {
+            b.iter_batched(
+                || PalmTree::<usize, usize>::from_iter((0..size).map(|i| (i, i))),
+                |map| {
+                    for entry in map {
+                        black_box(entry);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     palmtree,
     insert_sequence,
@@ -241,6 +271,7 @@ criterion_group!(
     remove_sequence,
     remove_random,
     lookup,
-    iterate
+    iterate,
+    iterate_owned,
 );
 criterion_main!(palmtree);

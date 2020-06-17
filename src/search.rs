@@ -1,5 +1,8 @@
-use crate::{arch::prefetch, branch::Branch, leaf::Leaf, types::Path};
-use sized_chunks::{types::ChunkLength, Chunk};
+use crate::{arch::prefetch, branch::Branch, leaf::Leaf, types::MaxHeight};
+use sized_chunks::Chunk;
+use std::marker::PhantomData;
+
+type PtrPath<K, V> = Chunk<(*const Branch<K, V>, isize), MaxHeight>;
 
 /// Find 'key' in 'keys', or the closest higher value.
 ///
@@ -7,10 +10,9 @@ use sized_chunks::{types::ChunkLength, Chunk};
 ///
 /// This is a checked version of `find_key_or_next`. No assumption about
 /// the content of `keys` is needed, and it will never panic.
-pub(crate) fn find_key<K, S>(keys: &Chunk<K, S>, key: &K) -> Option<usize>
+pub(crate) fn find_key<K>(keys: &[K], key: &K) -> Option<usize>
 where
     K: Ord,
-    S: ChunkLength<K>,
 {
     let size = keys.len();
     if size == 0 {
@@ -34,10 +36,9 @@ where
     }
 }
 
-pub(crate) fn find_key_linear<K, S>(keys: &Chunk<K, S>, target: &K) -> Option<usize>
+pub(crate) fn find_key_linear<K>(keys: &[K], target: &K) -> Option<usize>
 where
     K: Ord,
-    S: ChunkLength<K>,
 {
     for (index, key) in keys.iter().enumerate() {
         if target <= key {
@@ -56,10 +57,9 @@ where
 /// index of the highest value will be returned.
 ///
 /// If `keys` is empty, this function will panic.
-pub(crate) fn find_key_or_next<K, S>(keys: &Chunk<K, S>, key: &K) -> usize
+pub(crate) fn find_key_or_next<K>(keys: &[K], key: &K) -> usize
 where
     K: Ord,
-    S: ChunkLength<K>,
 {
     let size = keys.len();
     let mut low = 0;
@@ -78,10 +78,9 @@ where
 /// Find `key` in `keys`, or the closest lower value.
 ///
 /// Invariants as in `find_or_next` above apply, but reversed.
-pub(crate) fn find_key_or_prev<K, S>(keys: &Chunk<K, S>, key: &K) -> usize
+pub(crate) fn find_key_or_prev<K>(keys: &[K], key: &K) -> usize
 where
     K: Ord,
-    S: ChunkLength<K>,
 {
     let size = keys.len();
     let mut low = 0;
@@ -98,65 +97,76 @@ where
 }
 
 /// A pointer to a leaf entry which can be stepped forwards and backwards.
-pub(crate) struct PathedPointer<'a, K, V> {
-    stack: Path<'a, K, V>,
-    leaf: Option<&'a Leaf<K, V>>,
+pub(crate) struct PathedPointer<L, K, V> {
+    stack: PtrPath<K, V>,
+    leaf: *const Leaf<K, V>,
     index: usize,
+    lifetime: PhantomData<L>,
 }
 
-impl<'a, K, V> Clone for PathedPointer<'a, K, V>
-where
-    K: Clone + Ord,
-{
+impl<L, K, V> Clone for PathedPointer<L, K, V> {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
             leaf: self.leaf.clone(),
             index: self.index,
+            lifetime: PhantomData,
         }
     }
 }
 
 /// Find the path to the leaf which contains `key` or the closest higher key.
-fn path_for<'a, K, V>(tree: &'a Branch<K, V>, key: &K) -> Option<(Path<'a, K, V>, &'a Leaf<K, V>)>
+fn path_for<'a, K, V>(tree: &'a Branch<K, V>, key: &K) -> Option<(PtrPath<K, V>, &'a Leaf<K, V>)>
 where
     K: Clone + Ord,
 {
-    let mut path = Path::new();
-    if let Some(leaf) = tree.leaf_for(key, Some(&mut path)) {
-        Some((path, leaf))
-    } else {
-        None
+    let mut path: PtrPath<K, V> = Chunk::new();
+    let mut branch = tree;
+
+    loop {
+        if let Some(index) = find_key(branch.keys(), key) {
+            path.push_back((branch, index as isize));
+            if branch.height() > 1 {
+                branch = branch.get_branch(index);
+            } else {
+                return Some((path, branch.get_leaf(index)));
+            }
+        } else {
+            return None;
+        }
     }
 }
 
-impl<'a, K, V> PathedPointer<'a, K, V>
+impl<L, K, V> PathedPointer<L, K, V>
 where
     K: Clone + Ord,
 {
     pub(crate) fn null() -> Self {
         Self {
-            stack: Path::new(),
-            leaf: None,
+            stack: Chunk::new(),
+            leaf: std::ptr::null(),
             index: 0,
+            lifetime: PhantomData,
         }
     }
 
     /// Find `key` or the first higher key.
-    pub(crate) fn key_or_higher(tree: &'a Branch<K, V>, key: &K) -> Self {
+    pub(crate) fn key_or_higher(tree: &Branch<K, V>, key: &K) -> Self {
         let mut ptr = Self::null();
         if let Some((path, leaf)) = path_for(tree, key) {
             ptr.stack = path;
-            ptr.index = find_key_or_next(&leaf.keys, key);
-            ptr.leaf = Some(leaf);
+            ptr.index = find_key_or_next((*leaf).keys(), key);
+            ptr.leaf = leaf;
             // find_key_or_next assumes the highest key in the leaf isn't lower than `key`, but a search
             // through a tree with branch keys higher than the highest key present in the leaf can take
             // you to a node where this doesn't hold, so we have to check if we need to step forward.
             // If we do, we can depend on the next neighbour node containing the right key as its first
             // entry.
-            if ptr.key().unwrap() < key && !ptr.step_forward() {
-                // If we can't step forward, we were at the highest key already, so the iterator is empty.
-                ptr = Self::null();
+            unsafe {
+                if ptr.key().unwrap() < key && !ptr.step_forward() {
+                    // If we can't step forward, we were at the highest key already, so the iterator is empty.
+                    ptr = Self::null();
+                }
             }
         } else {
             // No target node for start bound means the key is higher than our highest value, so we leave ptr empty.
@@ -165,15 +175,17 @@ where
     }
 
     /// Find the first key higher than `key`.
-    pub(crate) fn higher_than_key(tree: &'a Branch<K, V>, key: &K) -> Self {
+    pub(crate) fn higher_than_key(tree: &Branch<K, V>, key: &K) -> Self {
         let mut ptr = Self::null();
         if let Some((path, leaf)) = path_for(tree, key) {
             ptr.stack = path;
-            ptr.index = find_key_or_next(&leaf.keys, key);
-            ptr.leaf = Some(leaf);
-            if &leaf.keys[ptr.index] == key && !ptr.step_forward() {
-                // If we can't step forward, we were at the highest key already, so the iterator is empty.
-                ptr = Self::null();
+            ptr.index = find_key_or_next(leaf.keys(), key);
+            ptr.leaf = leaf;
+            unsafe {
+                if &leaf.keys()[ptr.index] == key && !ptr.step_forward() {
+                    // If we can't step forward, we were at the highest key already, so the iterator is empty.
+                    return Self::null();
+                }
             }
         } else {
             // No target node for start bound means the key is higher than our highest value, so we leave ptr empty.
@@ -182,12 +194,12 @@ where
     }
 
     /// Find `key` or the first lower key.
-    pub(crate) fn key_or_lower(tree: &'a Branch<K, V>, key: &K) -> Self {
+    pub(crate) fn key_or_lower(tree: &Branch<K, V>, key: &K) -> Self {
         if let Some((path, leaf)) = path_for(tree, key) {
             let mut ptr = Self::null();
             ptr.stack = path;
-            ptr.index = find_key_or_next(&leaf.keys, key);
-            ptr.leaf = Some(leaf);
+            ptr.index = find_key_or_next(leaf.keys(), key);
+            ptr.leaf = leaf;
             ptr
         } else {
             // No target node for end bound means it's past the largest key, so get a path to the end of the tree.
@@ -196,17 +208,19 @@ where
     }
 
     /// Find the first key lower than `key`.
-    pub(crate) fn lower_than_key(tree: &'a Branch<K, V>, key: &K) -> Self {
+    pub(crate) fn lower_than_key(tree: &Branch<K, V>, key: &K) -> Self {
         if let Some((path, leaf)) = path_for(tree, key) {
             let mut ptr = Self::null();
             ptr.stack = path;
-            ptr.index = find_key_or_prev(&leaf.keys, key);
-            ptr.leaf = Some(leaf);
+            ptr.index = find_key_or_prev(leaf.keys(), key);
+            ptr.leaf = leaf;
             // If we've found a value equal to key, we step back one key.
             // If we've found a value higher than key, we're one branch ahead of the target key and step back.
-            if &leaf.keys[ptr.index] >= key && !ptr.step_back() {
-                // If we can't step back, we were at the lowest key already, so the iterator is empty.
-                return Self::null();
+            unsafe {
+                if &leaf.keys()[ptr.index] >= key && !ptr.step_back() {
+                    // If we can't step back, we were at the lowest key already, so the iterator is empty.
+                    return Self::null();
+                }
             }
             ptr
         } else {
@@ -216,9 +230,9 @@ where
     }
 
     /// Find the lowest key in the tree.
-    pub(crate) fn lowest(tree: &'a Branch<K, V>) -> Self {
+    pub(crate) fn lowest(tree: &Branch<K, V>) -> Self {
         let mut branch = tree;
-        let mut stack = Path::new();
+        let mut stack = PtrPath::new();
         loop {
             if branch.is_empty() {
                 return Self::null();
@@ -229,17 +243,18 @@ where
             } else {
                 return Self {
                     stack,
-                    leaf: Some(branch.get_leaf(0)),
+                    leaf: branch.get_leaf(0),
                     index: 0,
+                    lifetime: PhantomData,
                 };
             }
         }
     }
 
     /// Find the highest key in the tree.
-    pub(crate) fn highest(tree: &'a Branch<K, V>) -> Self {
+    pub(crate) fn highest(tree: &Branch<K, V>) -> Self {
         let mut branch = tree;
-        let mut stack = Path::new();
+        let mut stack = PtrPath::new();
         loop {
             if branch.is_empty() {
                 return Self::null();
@@ -252,8 +267,9 @@ where
                 let leaf = branch.get_leaf(index);
                 return Self {
                     stack,
-                    leaf: Some(leaf),
+                    leaf,
                     index: leaf.len() - 1,
+                    lifetime: PhantomData,
                 };
             }
         }
@@ -263,31 +279,31 @@ where
     ///
     /// If it returns `false`, you tried to step past the last entry.
     /// If this happens, the pointer is now a null pointer.
-    pub(crate) fn step_forward(&mut self) -> bool {
-        if let Some(leaf) = self.leaf {
+    pub(crate) unsafe fn step_forward(&mut self) -> bool {
+        if !self.is_null() {
             self.index += 1;
-            if self.index >= leaf.keys.len() {
+            if self.index >= (*self.leaf).keys().len() {
                 loop {
                     // Pop a branch off the top of the stack and examine it.
                     if !self.stack.is_empty() {
                         let (branch, mut index) = self.stack.pop_back();
                         index += 1;
-                        if index < branch.len() as isize {
+                        if index < (*branch).len() as isize {
                             // If we're not at the end yet, push the branch back on the stack and look at the next child.
                             self.stack.push_back((branch, index));
-                            if branch.has_branches() {
+                            if (*branch).has_branches() {
                                 // If it's a branch, push it on the stack and go through the loop again with this branch.
                                 self.stack
-                                    .push_back((branch.get_branch(index as usize), -1));
+                                    .push_back(((*branch).get_branch(index as usize), -1));
                                 continue;
                             } else {
                                 // If it's a leaf, this is our new leaf, we're done.
-                                self.leaf = Some(branch.get_leaf(index as usize));
+                                self.leaf = (*branch).get_leaf(index as usize);
                                 self.index = 0;
                                 // Prefetch the next leaf.
                                 let next_index = (index + 1) as usize;
-                                if next_index < branch.len() {
-                                    unsafe { prefetch(branch.get_leaf(next_index)) };
+                                if next_index < (*branch).len() {
+                                    prefetch((*branch).get_leaf(next_index));
                                 }
                                 break;
                             }
@@ -308,8 +324,8 @@ where
     /// Step a pointer back by one entry.
     ///
     /// See notes for `step_forward`.
-    pub(crate) fn step_back(&mut self) -> bool {
-        if self.leaf.is_some() {
+    pub(crate) unsafe fn step_back(&mut self) -> bool {
+        if !self.is_null() {
             if self.index > 0 {
                 self.index -= 1;
             } else {
@@ -321,19 +337,18 @@ where
                             index -= 1;
                             // If we're not at the end yet, push the branch back on the stack and look at the next child.
                             self.stack.push_back((branch, index));
-                            if branch.has_branches() {
-                                let child = branch.get_branch(index as usize);
+                            if (*branch).has_branches() {
+                                let child = (*branch).get_branch(index as usize);
                                 // If it's a branch, push it on the stack and go through the loop again with this branch.
                                 self.stack.push_back((child, child.len() as isize));
                                 continue;
                             } else {
-                                let leaf = branch.get_leaf(index as usize);
                                 // If it's a leaf, this is our new leaf, we're done.
-                                self.leaf = Some(leaf);
-                                self.index = leaf.keys.len() - 1;
+                                self.leaf = (*branch).get_leaf(index as usize);
+                                self.index = (*self.leaf).keys().len() - 1;
                                 // Prefetch the next leaf.
                                 if index > 0 {
-                                    unsafe { prefetch(branch.get_leaf(index as usize - 1)) };
+                                    prefetch((*branch).get_leaf(index as usize - 1));
                                 }
                                 break;
                             }
@@ -352,19 +367,32 @@ where
     }
 
     pub(crate) fn clear(&mut self) {
-        self.leaf = None;
+        self.leaf = std::ptr::null();
     }
 
     pub(crate) fn is_null(&self) -> bool {
-        self.leaf.is_none()
+        self.leaf.is_null()
     }
 
-    pub(crate) fn key(&self) -> Option<&'a K> {
-        self.leaf.map(|leaf| &leaf.keys[self.index])
+    pub(crate) unsafe fn deref_leaf<'a>(&'a self) -> Option<&'a Leaf<K, V>> {
+        self.leaf.as_ref()
     }
 
-    pub(crate) fn value(&self) -> Option<&'a V> {
-        self.leaf.map(|leaf| &leaf.values[self.index])
+    pub(crate) unsafe fn deref_mut_leaf<'a>(&'a mut self) -> Option<&'a mut Leaf<K, V>> {
+        (self.leaf as *mut Leaf<K, V>).as_mut()
+    }
+
+    pub(crate) unsafe fn key<'a>(&'a self) -> Option<&'a K> {
+        self.deref_leaf().map(|leaf| &leaf.keys[self.index])
+    }
+
+    pub(crate) unsafe fn value<'a>(&'a self) -> Option<&'a V> {
+        self.deref_leaf().map(|leaf| &leaf.values[self.index])
+    }
+
+    pub(crate) unsafe fn value_mut<'a>(&'a mut self) -> Option<&'a mut V> {
+        let index = self.index;
+        self.deref_mut_leaf().map(|leaf| &mut leaf.values[index])
     }
 }
 
