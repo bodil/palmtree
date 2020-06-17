@@ -3,6 +3,7 @@ use sized_chunks::Chunk;
 use std::fmt::{Debug, Error, Formatter};
 
 /// A leaf node contains an ordered sequence of direct mappings from keys to values.
+#[derive(Clone)]
 pub(crate) struct Leaf<K, V> {
     pub(crate) keys: Chunk<K, LeafSize>,
     pub(crate) values: Chunk<V, LeafSize>,

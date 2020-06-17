@@ -3,6 +3,7 @@ use crate::{search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
+    iter::FusedIterator,
     ops::RangeBounds,
 };
 
@@ -133,6 +134,13 @@ where
         }
         Some((right_key, value))
     }
+}
+
+impl<'a, K, V> FusedIterator for IterMut<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a,
+{
 }
 
 impl<'a, K, V> Debug for IterMut<'a, K, V> {

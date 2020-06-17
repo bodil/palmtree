@@ -34,6 +34,32 @@ impl<K, V> Drop for Branch<K, V> {
     }
 }
 
+impl<K, V> Clone for Branch<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        let mut children = Chunk::new();
+        if self.has_branches() {
+            for node in &self.children {
+                let branch = Box::new(unsafe { node.as_branch() }.clone());
+                children.push_back(branch.into());
+            }
+        } else {
+            for node in &self.children {
+                let leaf = Box::new(unsafe { node.as_leaf() }.clone());
+                children.push_back(leaf.into());
+            }
+        }
+        Self {
+            height: self.height,
+            keys: self.keys.clone(),
+            children,
+        }
+    }
+}
+
 impl<K, V> Branch<K, V> {
     pub(crate) fn new(height: usize) -> Self {
         debug_assert!(height <= MaxHeight::USIZE);

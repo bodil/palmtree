@@ -18,7 +18,7 @@ use std::{
     collections::BTreeMap,
     hash::{Hash, Hasher},
     iter::FromIterator,
-    ops::{Index, IndexMut, RangeBounds},
+    ops::{Add, AddAssign, Index, IndexMut, RangeBounds},
 };
 
 pub mod asmtest;
@@ -284,20 +284,66 @@ where
         self.remove_result(result)
     }
 
-    pub fn merge_left(left: Self, right: Self) -> Self {
-        Self::load(MergeIter::merge(
-            left.into_iter(),
-            right.into_iter(),
+    fn merge_left_from(
+        left: impl Iterator<Item = (K, V)>,
+        right: impl Iterator<Item = (K, V)>,
+    ) -> impl Iterator<Item = (K, V)> {
+        MergeIter::merge(
+            left,
+            right,
             |(left, _), (right, _)| left > right,
-        ))
+            |(left, _), (right, _)| left == right,
+        )
+    }
+
+    fn merge_right_from(
+        left: impl Iterator<Item = (K, V)>,
+        right: impl Iterator<Item = (K, V)>,
+    ) -> impl Iterator<Item = (K, V)> {
+        MergeIter::merge(
+            left,
+            right,
+            |(left, _), (right, _)| left >= right,
+            |(left, _), (right, _)| left == right,
+        )
+    }
+
+    pub fn merge_left_iter(left: Self, right: Self) -> impl Iterator<Item = (K, V)> {
+        Self::merge_left_from(left.into_iter(), right.into_iter())
+    }
+
+    pub fn merge_left(left: Self, right: Self) -> Self {
+        Self::load(Self::merge_left_iter(left, right))
+    }
+
+    pub fn merge_right_iter(left: Self, right: Self) -> impl Iterator<Item = (K, V)> {
+        Self::merge_right_from(left.into_iter(), right.into_iter())
     }
 
     pub fn merge_right(left: Self, right: Self) -> Self {
-        Self::load(MergeIter::merge(
-            left.into_iter(),
-            right.into_iter(),
-            |(left, _), (right, _)| left >= right,
-        ))
+        Self::load(Self::merge_right_iter(left, right))
+    }
+
+    pub fn append_left(&mut self, other: Self) {
+        let root = self.root.take();
+        if root.is_some() {
+            let left = OwnedIter::new(root, self.size);
+            let right = other.into_iter();
+            *self = Self::load(Self::merge_left_from(left, right));
+        } else {
+            *self = other;
+        }
+    }
+
+    pub fn append_right(&mut self, other: Self) {
+        let root = self.root.take();
+        if root.is_some() {
+            let left = OwnedIter::new(root, self.size);
+            let right = other.into_iter();
+            *self = Self::load(Self::merge_right_from(left, right));
+        } else {
+            *self = other;
+        }
     }
 
     fn trim_root(&mut self) {
@@ -332,6 +378,19 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+impl<K, V> Clone for PalmTree<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            size: self.size,
+        }
     }
 }
 
@@ -421,12 +480,65 @@ where
 
 impl<'a, K, V> Extend<(&'a K, &'a V)> for PalmTree<K, V>
 where
-    K: 'a + Ord + Clone,
-    V: 'a + Clone,
+    K: 'a + Ord + Copy,
+    V: 'a + Copy,
 {
     fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: I) {
         for (k, v) in iter {
             self.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+impl<K, V> Add for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        Self::merge_right(self, other)
+    }
+}
+
+impl<K, V> AddAssign for PalmTree<K, V>
+where
+    K: Ord + Clone,
+{
+    fn add_assign(&mut self, other: Self) {
+        self.append_right(other)
+    }
+}
+
+impl<'a, K, V> Add<&'a PalmTree<K, V>> for PalmTree<K, V>
+where
+    K: Ord + Copy,
+    V: Copy,
+{
+    type Output = Self;
+
+    fn add(self, other: &Self) -> Self::Output {
+        Self::load(Self::merge_right_from(
+            self.into_iter(),
+            other.iter().map(|(k, v)| (k.clone(), v.clone())),
+        ))
+    }
+}
+
+impl<'a, K, V> AddAssign<&'a PalmTree<K, V>> for PalmTree<K, V>
+where
+    K: Ord + Copy,
+    V: Copy,
+{
+    fn add_assign(&mut self, other: &'a PalmTree<K, V>) {
+        let root = self.root.take();
+        if root.is_none() {
+            *self = other.clone();
+        } else {
+            *self = Self::load(Self::merge_right_from(
+                OwnedIter::new(root, self.size),
+                other.iter().map(|(k, v)| (k.clone(), v.clone())),
+            ))
         }
     }
 }
@@ -475,7 +587,7 @@ where
     type Item = (K, V);
     type IntoIter = OwnedIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
-        OwnedIter::new(self)
+        OwnedIter::new(self.root, self.size)
     }
 }
 
