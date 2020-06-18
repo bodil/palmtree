@@ -21,8 +21,6 @@ use std::{
     ops::{Add, AddAssign, Index, IndexMut, RangeBounds},
 };
 
-pub mod asmtest;
-
 mod arch;
 mod search;
 mod types;
