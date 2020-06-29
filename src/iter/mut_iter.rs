@@ -8,14 +8,13 @@ use std::{
 };
 
 pub struct IterMut<'a, K, V> {
-    left: PathedPointer<&'a mut (), K, V>,
-    right: PathedPointer<&'a mut (), K, V>,
+    left: PathedPointer<&'a mut (K, V), K, V>,
+    right: PathedPointer<&'a mut (K, V), K, V>,
 }
 
 impl<'a, K, V> IterMut<'a, K, V>
 where
-    K: 'a + Clone + Ord,
-    V: 'a,
+    K: Clone + Ord,
 {
     fn null() -> Self {
         Self {
@@ -84,8 +83,7 @@ where
 
 impl<'a, K, V> Iterator for IterMut<'a, K, V>
 where
-    K: 'a + Clone + Ord,
-    V: 'a,
+    K: Clone + Ord,
 {
     type Item = (&'a K, &'a mut V);
 
@@ -136,12 +134,7 @@ where
     }
 }
 
-impl<'a, K, V> FusedIterator for IterMut<'a, K, V>
-where
-    K: 'a + Clone + Ord,
-    V: 'a,
-{
-}
+impl<'a, K, V> FusedIterator for IterMut<'a, K, V> where K: Clone + Ord {}
 
 impl<'a, K, V> Debug for IterMut<'a, K, V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

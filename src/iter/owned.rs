@@ -6,8 +6,8 @@ use std::{
 
 pub struct OwnedIter<K, V> {
     tree: Option<Box<Branch<K, V>>>,
-    left: PathedPointer<(), K, V>,
-    right: PathedPointer<(), K, V>,
+    left: PathedPointer<(K, V), K, V>,
+    right: PathedPointer<(K, V), K, V>,
     remaining: usize,
 }
 

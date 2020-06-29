@@ -22,20 +22,19 @@ use std::{
 };
 
 mod arch;
+mod branch;
+mod entry;
+mod iter;
+mod leaf;
 mod search;
 mod types;
 
-mod leaf;
-
-mod branch;
-
-mod iter;
-
 use branch::Branch;
 use leaf::Leaf;
-use types::{InsertResult, RemoveResult};
 
+pub use entry::Entry;
 pub use iter::{Iter, IterMut, MergeIter, OwnedIter};
+use search::PathedPointer;
 
 #[cfg(any(test, feature = "test"))]
 pub mod tests;
@@ -217,76 +216,56 @@ where
         IterMut::new(self, range)
     }
 
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let len = self.size;
-        if let Some(ref mut root) = self.root {
-            // Special case: if a tree has size 0 but there is a root, it's because
-            // we removed the last entry and the root has been left allocated.
-            // Tree walking algos assume the tree has no empty nodes, so we have to
-            // handle this as a special case.
-            if len == 0 {
-                // Make sure the delete trimmed the tree properly.
-                debug_assert_eq!(0, root.len());
-                debug_assert_eq!(1, root.height());
-
-                root.push_key(key.clone());
-                root.push_leaf(Box::new(Leaf::unit(key, value)));
-                self.size = 1;
-                return None;
-            }
-            match root.insert(key, value) {
-                InsertResult::Added => {
-                    self.size += 1;
-                    None
-                }
-                InsertResult::Replaced(value) => Some(value),
-                InsertResult::Full(key, value) => {
-                    let height = root.height() + 1;
-                    let key2 = root.last_key().unwrap().clone();
-                    let child = std::mem::replace(&mut *root, Box::new(Branch::new(height)));
-                    root.push_key(key2);
-                    root.push_branch(child);
-                    self.insert(key, value)
-                }
-            }
-        } else {
-            self.root = Some(Box::new(Branch::unit(Box::new(Leaf::unit(key, value)))));
-            self.size = 1;
-            None
-        }
+    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V> {
+        Entry::new(self, key)
     }
 
-    fn remove_result(&mut self, result: RemoveResult<K, V>) -> Option<(K, V)> {
-        match result {
-            RemoveResult::Deleted(key, value) => {
-                self.size -= 1;
-                Some((key, value))
+    fn split_root(root: &mut Box<Branch<K, V>>) {
+        let old_root = std::mem::replace(root, Branch::new(root.height() + 1).into());
+        let (left, right) = old_root.split();
+        root.push_key(left.highest().clone());
+        root.push_key(right.highest().clone());
+        root.push_branch(left);
+        root.push_branch(right);
+    }
+
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        match self.entry(key) {
+            Entry::Occupied(mut entry) => Some(entry.insert(value)),
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+                None
             }
-            // Deallocating the root if the tree becomes empty would be memory efficient,
-            // but it would not be performance efficient, so we trim it and leave it.
-            RemoveResult::DeletedAndEmpty(key, value) => {
-                self.size -= 1;
-                debug_assert_eq!(0, self.size); // We shouldn't be here if the tree isn't now empty.
-                self.trim_root();
-                Some((key, value))
-            }
-            RemoveResult::NotHere => None,
         }
     }
 
     pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
-        let result = self.root.as_mut()?.remove(key);
-        self.remove_result(result)
+        if let Ok(path) = PathedPointer::<&mut (K, V), _, _>::exact_key(self.root.as_mut()?, key) {
+            self.size -= 1;
+            Some(unsafe { path.remove() })
+        } else {
+            None
+        }
     }
 
     pub fn remove_lowest(&mut self) -> Option<(K, V)> {
-        let result = self.root.as_mut()?.remove_lowest();
-        self.remove_result(result)
+        if self.is_empty() {
+            None
+        } else {
+            let path = PathedPointer::<&mut (K, V), _, _>::lowest(self.root.as_mut()?);
+            self.size -= 1;
+            Some(unsafe { path.remove() })
+        }
     }
 
     pub fn remove_highest(&mut self) -> Option<(K, V)> {
-        let result = self.root.as_mut()?.remove_highest();
-        self.remove_result(result)
+        if self.is_empty() {
+            None
+        } else {
+            let path = PathedPointer::<&mut (K, V), _, _>::highest(self.root.as_mut()?);
+            self.size -= 1;
+            Some(unsafe { path.remove() })
+        }
     }
 
     fn merge_left_from(
@@ -655,6 +634,13 @@ mod test {
             assert_eq!(Some((i, i)), tree.remove(&i));
             assert_eq!(None, tree.remove(&i));
         }
+    }
+
+    #[test]
+    fn small_delete() {
+        let mut tree: PalmTree<usize, usize> = PalmTree::load((0..64).map(|i| (i, i)));
+        assert_eq!(Some((0, 0)), tree.remove(&0));
+        assert_eq!(None, tree.remove(&0));
     }
 
     #[test]

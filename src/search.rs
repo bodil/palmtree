@@ -1,6 +1,9 @@
 use crate::{arch::prefetch, branch::Branch, leaf::Leaf, types::MaxHeight};
 use sized_chunks::Chunk;
-use std::marker::PhantomData;
+use std::{
+    fmt::{Debug, Error, Formatter},
+    marker::PhantomData,
+};
 
 type PtrPath<K, V> = Chunk<(*const Branch<K, V>, isize), MaxHeight>;
 
@@ -115,26 +118,35 @@ impl<L, K, V> Clone for PathedPointer<L, K, V> {
     }
 }
 
-/// Find the path to the leaf which contains `key` or the closest higher key.
-fn path_for<'a, K, V>(tree: &'a Branch<K, V>, key: &K) -> Option<(PtrPath<K, V>, &'a Leaf<K, V>)>
+fn walk_path<'a, K, V>(
+    mut branch: &'a Branch<K, V>,
+    key: &K,
+    path: &mut PtrPath<K, V>,
+) -> Option<&'a Leaf<K, V>>
 where
     K: Clone + Ord,
 {
-    let mut path: PtrPath<K, V> = Chunk::new();
-    let mut branch = tree;
-
     loop {
         if let Some(index) = find_key(branch.keys(), key) {
             path.push_back((branch, index as isize));
             if branch.height() > 1 {
                 branch = branch.get_branch(index);
             } else {
-                return Some((path, branch.get_leaf(index)));
+                return Some(branch.get_leaf(index));
             }
         } else {
             return None;
         }
     }
+}
+
+/// Find the path to the leaf which contains `key` or the closest higher key.
+fn path_for<'a, K, V>(tree: &'a Branch<K, V>, key: &K) -> Option<(PtrPath<K, V>, &'a Leaf<K, V>)>
+where
+    K: Clone + Ord,
+{
+    let mut path: PtrPath<K, V> = Chunk::new();
+    walk_path(tree, key, &mut path).map(|leaf| (path, leaf))
 }
 
 impl<L, K, V> PathedPointer<L, K, V>
@@ -150,12 +162,36 @@ where
         }
     }
 
+    /// Find `key` and return `Ok(path)` for a key match or `Err(path)` for an absent key with
+    /// the path to the leaf it should be in. This path will be null if the key is larger than
+    /// the tree's current highest key.
+    pub(crate) fn exact_key(tree: &Branch<K, V>, key: &K) -> Result<Self, Self> {
+        if let Some((stack, leaf)) = path_for(tree, key) {
+            match leaf.keys().binary_search(key) {
+                Ok(index) => Ok(Self {
+                    stack,
+                    leaf,
+                    index,
+                    lifetime: PhantomData,
+                }),
+                Err(index) => Err(Self {
+                    stack,
+                    leaf,
+                    index,
+                    lifetime: PhantomData,
+                }),
+            }
+        } else {
+            Err(Self::null())
+        }
+    }
+
     /// Find `key` or the first higher key.
     pub(crate) fn key_or_higher(tree: &Branch<K, V>, key: &K) -> Self {
         let mut ptr = Self::null();
         if let Some((path, leaf)) = path_for(tree, key) {
             ptr.stack = path;
-            ptr.index = find_key_or_next((*leaf).keys(), key);
+            ptr.index = find_key_or_next(leaf.keys(), key);
             ptr.leaf = leaf;
             // find_key_or_next assumes the highest key in the leaf isn't lower than `key`, but a search
             // through a tree with branch keys higher than the highest key present in the leaf can take
@@ -366,6 +402,146 @@ where
         true
     }
 
+    /// Remove the entry being pointed at.
+    ///
+    /// You're responsible for ensuring there is indeed an entry being pointed at.
+    pub(crate) unsafe fn remove(mut self) -> (K, V) {
+        // TODO need a strategy for rebalancing after remove
+        let index = self.index;
+        let leaf = self.deref_mut_leaf().unwrap();
+        let key = leaf.keys.remove(index);
+        let value = leaf.values.remove(index);
+        if leaf.is_empty() {
+            loop {
+                let (branch, index) = self.stack.pop_back();
+                let branch = &mut *(branch as *mut Branch<K, V>);
+                let index = index as usize;
+                branch.remove_key(index);
+                if branch.has_leaves() {
+                    branch.remove_leaf(index);
+                } else {
+                    branch.remove_branch(index);
+                }
+                if !branch.is_empty() || self.stack.is_empty() {
+                    return (key, value);
+                }
+            }
+        } else {
+            (key, value)
+        }
+    }
+
+    /// Insert a key at the index being pointed at.
+    ///
+    /// You're responsible for ensuring that something is being pointed at,
+    /// that what's being pointed at is the location in the leaf where this
+    /// key should be inserted, and that the key isn't already there.
+    /// This is the assumption validated by the `exact_key` constructor when it
+    /// returns a non-null `Err` value.
+    pub(crate) unsafe fn insert(mut self, key: K, value: V) -> Result<Self, (K, V)> {
+        let index = self.index;
+        let leaf = self.deref_mut_leaf().unwrap();
+        if !leaf.is_full() {
+            leaf.keys.insert(index, key);
+            leaf.values.insert(index, value);
+            Ok(self)
+        } else {
+            // Walk up the tree to find somewhere to split.
+            loop {
+                if self.stack.is_empty() {
+                    return Err((key, value));
+                }
+                let (branch, index) = self.stack.pop_back();
+                let branch = &mut *(branch as *mut Branch<K, V>);
+                let index = index as usize;
+                if !branch.is_full() {
+                    let choose_index = if branch.has_branches() {
+                        let (left, right) = branch.remove_branch(index).split();
+                        let left_highest = left.highest();
+                        let choose_index = if &key <= left_highest {
+                            index
+                        } else {
+                            index + 1
+                        };
+                        branch.insert_key(index, left_highest.clone());
+                        branch.insert_branch_pair(index, left, right);
+                        choose_index
+                    } else {
+                        let (left, right) = branch.remove_leaf(index).split();
+                        let left_highest = left.highest();
+                        let choose_index = if &key <= left_highest {
+                            index
+                        } else {
+                            index + 1
+                        };
+                        branch.insert_key(index, left_highest.clone());
+                        branch.insert_leaf_pair(index, left, right);
+                        choose_index
+                    };
+                    // We're going to walk down either the left or the right hand branch of our split.
+                    // We're guaranteed to find a leaf, but it might be full if we split a higher branch,
+                    // so we might have to go back up and split further.
+                    let leaf = if branch.has_branches() {
+                        walk_path(branch.get_branch(choose_index), &key, &mut self.stack)
+                    } else {
+                        Some(branch.get_leaf(choose_index))
+                    };
+                    if let Some(leaf) = leaf {
+                        if !leaf.is_full() {
+                            let index = leaf
+                                .keys
+                                .binary_search(&key)
+                                .expect_err("tried to insert() a key that already exists");
+                            self.leaf = leaf;
+                            self.index = index;
+                            assert!(
+                                index <= leaf.keys.len(),
+                                "index {} > len {}",
+                                index,
+                                leaf.keys.len()
+                            );
+                            let leaf = self.deref_mut_leaf().unwrap();
+                            leaf.keys.insert(index, key);
+                            leaf.values.insert(index, value);
+                            return Ok(self);
+                        }
+                    } else {
+                        unreachable!("walk_path() failed to produce a leaf, even though the leaf should be there!")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Insert a value at the right edge of the tree.
+    /// If it returns false, you need to split the root and try again.
+    ///
+    /// This must only be called on a null pointer, and the key provided must
+    /// be higher than the tree's current maximum.
+    pub(crate) unsafe fn push_last(
+        mut self,
+        root: &mut Branch<K, V>,
+        key: K,
+        value: V,
+    ) -> Result<Self, (K, V)> {
+        let mut branch = root;
+        let mut index;
+        loop {
+            index = branch.len() - 1;
+            debug_assert!(branch.highest() < &key);
+            branch.keys[index] = key.clone();
+            self.stack.push_back((branch, index as isize));
+            if branch.has_branches() {
+                branch = branch.get_branch_mut(index);
+            } else {
+                break;
+            }
+        }
+        self.leaf = branch.get_leaf(index);
+        self.index = (*self.leaf).len();
+        self.insert(key, value)
+    }
+
     pub(crate) fn clear(&mut self) {
         self.leaf = std::ptr::null();
     }
@@ -382,6 +558,17 @@ where
         (self.leaf as *mut Leaf<K, V>).as_mut()
     }
 
+    pub(crate) unsafe fn into_entry_mut<'a>(self) -> (&'a mut K, &'a mut V)
+    where
+        L: 'a,
+    {
+        let index = self.index;
+        let leaf = &mut *(self.leaf as *mut Leaf<K, V>);
+        let key: *mut K = &mut leaf.keys[index];
+        let value: *mut V = &mut leaf.values[index];
+        (&mut *key, &mut *value)
+    }
+
     pub(crate) unsafe fn key<'a>(&'a self) -> Option<&'a K> {
         self.deref_leaf().map(|leaf| &leaf.keys[self.index])
     }
@@ -393,6 +580,12 @@ where
     pub(crate) unsafe fn value_mut<'a>(&'a mut self) -> Option<&'a mut V> {
         let index = self.index;
         self.deref_mut_leaf().map(|leaf| &mut leaf.values[index])
+    }
+}
+
+impl<L, K, V> Debug for PathedPointer<L, K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "PathedPointer")
     }
 }
 

@@ -8,8 +8,8 @@ use std::{
 };
 
 pub struct Iter<'a, K, V> {
-    left: PathedPointer<&'a (), K, V>,
-    right: PathedPointer<&'a (), K, V>,
+    left: PathedPointer<&'a (K, V), K, V>,
+    right: PathedPointer<&'a (K, V), K, V>,
 }
 
 impl<'a, K, V> Clone for Iter<'a, K, V>
@@ -26,8 +26,7 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
-    V: 'a,
+    K: Clone + Ord,
 {
     fn null() -> Self {
         Self {
@@ -84,8 +83,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
-    V: 'a,
+    K: Clone + Ord,
 {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -111,8 +109,7 @@ where
 
 impl<'a, K, V> DoubleEndedIterator for Iter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
-    V: 'a,
+    K: Clone + Ord,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -135,12 +132,7 @@ where
     }
 }
 
-impl<'a, K, V> FusedIterator for Iter<'a, K, V>
-where
-    K: 'a + Clone + Ord,
-    V: 'a,
-{
-}
+impl<'a, K, V> FusedIterator for Iter<'a, K, V> where K: Clone + Ord {}
 
 impl<'a, K, V> Debug for Iter<'a, K, V>
 where

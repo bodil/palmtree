@@ -1,4 +1,4 @@
-use crate::types::{InsertResult, LeafSize, RemoveResult};
+use crate::types::LeafSize;
 use sized_chunks::Chunk;
 use std::fmt::{Debug, Error, Formatter};
 
@@ -28,7 +28,7 @@ impl<K, V> Leaf<K, V> {
         self.keys.len()
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
@@ -80,67 +80,6 @@ where
             }
         }
         None
-    }
-
-    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertResult<K, V> {
-        match self.keys.binary_search(&key) {
-            Ok(index) => {
-                self.keys[index] = key;
-                InsertResult::Replaced(std::mem::replace(&mut self.values[index], value))
-            }
-            Err(index) => {
-                if !self.is_full() {
-                    self.keys.insert(index, key);
-                    self.values.insert(index, value);
-                    InsertResult::Added
-                } else {
-                    InsertResult::Full(key, value)
-                }
-            }
-        }
-    }
-
-    pub(crate) fn remove(&mut self, key: &K) -> RemoveResult<K, V> {
-        match self.keys.binary_search(&key) {
-            Ok(index) => {
-                let key = self.keys.remove(index);
-                let value = self.values.remove(index);
-                if self.is_empty() {
-                    RemoveResult::DeletedAndEmpty(key, value)
-                } else {
-                    RemoveResult::Deleted(key, value)
-                }
-            }
-            Err(_) => RemoveResult::NotHere,
-        }
-    }
-
-    pub(crate) fn remove_lowest(&mut self) -> RemoveResult<K, V> {
-        if self.is_empty() {
-            RemoveResult::NotHere
-        } else {
-            let key = self.keys.pop_front();
-            let value = self.values.pop_front();
-            if self.is_empty() {
-                RemoveResult::DeletedAndEmpty(key, value)
-            } else {
-                RemoveResult::Deleted(key, value)
-            }
-        }
-    }
-
-    pub(crate) fn remove_highest(&mut self) -> RemoveResult<K, V> {
-        if self.is_empty() {
-            RemoveResult::NotHere
-        } else {
-            let key = self.keys.pop_back();
-            let value = self.values.pop_back();
-            if self.is_empty() {
-                RemoveResult::DeletedAndEmpty(key, value)
-            } else {
-                RemoveResult::Deleted(key, value)
-            }
-        }
     }
 }
 
