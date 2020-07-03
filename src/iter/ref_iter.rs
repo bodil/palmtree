@@ -1,20 +1,28 @@
 use super::paths_from_range;
-use crate::{search::PathedPointer, PalmTree};
+use crate::{branch::node::Node, search::PathedPointer, PalmTree};
+use sized_chunks::types::ChunkLength;
 use std::{
     cmp::Ordering,
     fmt::{Debug, Error, Formatter},
     iter::FusedIterator,
     ops::RangeBounds,
 };
+use typenum::{IsGreater, U3};
 
-pub struct Iter<'a, K, V> {
-    left: PathedPointer<&'a (K, V), K, V>,
-    right: PathedPointer<&'a (K, V), K, V>,
+pub struct Iter<'a, K, V, B, L>
+where
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+{
+    left: PathedPointer<&'a (K, V), K, V, B, L>,
+    right: PathedPointer<&'a (K, V), K, V, B, L>,
 }
 
-impl<'a, K, V> Clone for Iter<'a, K, V>
+impl<'a, K, V, B, L> Clone for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -24,9 +32,11 @@ where
     }
 }
 
-impl<'a, K, V> Iter<'a, K, V>
+impl<'a, K, V, B, L> Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
+    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn null() -> Self {
         Self {
@@ -35,7 +45,7 @@ where
         }
     }
 
-    pub(crate) fn new<R>(tree: &'a PalmTree<K, V>, range: R) -> Self
+    pub(crate) fn new<R>(tree: &'a PalmTree<K, V, B, L>, range: R) -> Self
     where
         R: RangeBounds<K>,
     {
@@ -56,12 +66,12 @@ where
         debug_assert!(result);
     }
 
-    fn left(&self) -> &'a PathedPointer<&'a (), K, V> {
-        unsafe { &*(&self.left as *const _ as *const PathedPointer<&'a (), K, V>) }
+    fn left(&self) -> &'a PathedPointer<&'a (), K, V, B, L> {
+        unsafe { &*(&self.left as *const _ as *const PathedPointer<&'a (), K, V, B, L>) }
     }
 
-    fn right(&self) -> &'a PathedPointer<&'a (), K, V> {
-        unsafe { &*(&self.right as *const _ as *const PathedPointer<&'a (), K, V>) }
+    fn right(&self) -> &'a PathedPointer<&'a (), K, V, B, L> {
+        unsafe { &*(&self.right as *const _ as *const PathedPointer<&'a (), K, V, B, L>) }
     }
 
     fn left_key(&self) -> Option<&'a K> {
@@ -81,9 +91,11 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for Iter<'a, K, V>
+impl<'a, K, V, B, L> Iterator for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
+    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -107,9 +119,11 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for Iter<'a, K, V>
+impl<'a, K, V, B, L> DoubleEndedIterator for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
+    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -132,12 +146,20 @@ where
     }
 }
 
-impl<'a, K, V> FusedIterator for Iter<'a, K, V> where K: Clone + Ord {}
+impl<'a, K, V, B, L> FusedIterator for Iter<'a, K, V, B, L>
+where
+    K: Clone + Ord,
+    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+{
+}
 
-impl<'a, K, V> Debug for Iter<'a, K, V>
+impl<'a, K, V, B, L> Debug for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord + Debug,
     V: Debug,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.clone()).finish()

@@ -11,6 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.3"
 arbitrary = { version = "0.4", features = ["derive"] }
+typenum = "1.12"
 
 [dependencies.palmtree]
 path = ".."

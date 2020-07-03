@@ -1,7 +1,7 @@
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
-use palmtree::PalmTree;
+use palmtree::StdPalmTree as PalmTree;
 use rand::prelude::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
@@ -264,6 +264,72 @@ fn iterate_owned(c: &mut Criterion) {
     group.finish();
 }
 
+fn find_key_binary<K>(keys: &[K], key: &K) -> usize
+where
+    K: Ord,
+{
+    let size = keys.len();
+
+    let mut low = 0;
+    let mut high = size - 1;
+    while low != high {
+        let mid = (low + high) / 2;
+        if unsafe { keys.get_unchecked(mid) } < key {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn branchless_binary_search<K: Ord>(keys: &[K], key: &K) -> usize {
+    unsafe {
+        let mut base = keys.as_ptr();
+        let mut n = keys.len();
+        while n > 1 {
+            let half = n / 2;
+            if *base.add(half) < *key {
+                base = base.add(half);
+            }
+            n -= half;
+        }
+        ((if *base < *key { base.add(1) } else { base }) as usize - keys.as_ptr() as usize)
+            / std::mem::size_of::<K>()
+    }
+}
+
+pub fn search_strategies(c: &mut Criterion) {
+    let mut group = c.benchmark_group("search_strategies/cmove");
+    for size in &[8, 16, 32, 64, 128, 256usize] {
+        let keys = Vec::<u64>::from_iter(0..(*size as u64));
+        group.bench_with_input(BenchmarkId::new("binary", size), size, |b, &size| {
+            b.iter_batched_ref(
+                || Vec::from_iter((0..256u64).map(|i| i % (size as u64))),
+                |lookup| {
+                    for key in lookup {
+                        let index = find_key_binary(&keys, &key);
+                        assert_eq!(keys[index], *key);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+        group.bench_with_input(BenchmarkId::new("branchless", size), size, |b, &size| {
+            b.iter_batched_ref(
+                || Vec::from_iter((0..256u64).map(|i| i % (size as u64))),
+                |lookup| {
+                    for key in lookup {
+                        let index = branchless_binary_search(&keys, &key);
+                        assert_eq!(keys[index], *key);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+}
+
 criterion_group!(
     palmtree,
     insert_sequence,
@@ -273,5 +339,6 @@ criterion_group!(
     lookup,
     iterate,
     iterate_owned,
+    search_strategies,
 );
 criterion_main!(palmtree);

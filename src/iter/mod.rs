@@ -1,10 +1,12 @@
 #![allow(unreachable_pub)] // pub exports below erroneously complain without this
 
-use crate::{search::PathedPointer, PalmTree};
+use crate::{branch::node::Node, search::PathedPointer, PalmTree};
+use sized_chunks::types::ChunkLength;
 use std::{
     cmp::Ordering,
     ops::{Bound, RangeBounds},
 };
+use typenum::{IsGreater, U3};
 
 mod ref_iter;
 pub use ref_iter::Iter;
@@ -18,13 +20,18 @@ pub use owned::OwnedIter;
 mod merge;
 pub use merge::MergeIter;
 
-fn paths_from_range<'a, L, K, V, R>(
-    tree: &'a PalmTree<K, V>,
+fn paths_from_range<'a, Lifetime, K, V, B, L, R>(
+    tree: &'a PalmTree<K, V, B, L>,
     range: R,
-) -> Option<(PathedPointer<L, K, V>, PathedPointer<L, K, V>)>
+) -> Option<(
+    PathedPointer<Lifetime, K, V, B, L>,
+    PathedPointer<Lifetime, K, V, B, L>,
+)>
 where
     K: Clone + Ord,
     R: RangeBounds<K>,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     match (range.start_bound(), range.end_bound()) {
         (Bound::Excluded(left), Bound::Excluded(right)) if left == right => {
@@ -72,12 +79,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use crate::StdPalmTree;
 
     #[test]
     fn consuming_iter() {
         let size = 65536usize;
-        let tree = PalmTree::load((0..size).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..size).map(|i| (i, i)));
         for (index, (k, v)) in tree.into_iter().enumerate() {
             assert_eq!(index, k);
             assert_eq!(index, v);
@@ -87,7 +94,7 @@ mod test {
     #[test]
     fn iterate_single_leaf() {
         let size = 64usize;
-        let tree = PalmTree::load((0..size).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..size).map(|i| (i, i)));
         // let expected: Vec<_> = (0..size).map(|i| (i, i)).collect();
         // let result: Vec<_> = tree.iter().map(|(k, v)| (*k, *v)).collect();
         tree.iter().for_each(|i| {
@@ -99,7 +106,7 @@ mod test {
     #[test]
     fn iterate_forward() {
         let size = 65536usize;
-        let tree = PalmTree::load((0..size).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..size).map(|i| (i, i)));
         let expected: Vec<_> = (0..size).map(|i| (i, i)).collect();
         let result: Vec<_> = tree.iter().map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -108,7 +115,7 @@ mod test {
     #[test]
     fn iterate_backward() {
         let size = 65536usize;
-        let tree = PalmTree::load((0..size).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..size).map(|i| (i, i)));
         let expected: Vec<_> = (0..size).map(|i| (i, i)).rev().collect();
         let result: Vec<_> = tree.iter().map(|(k, v)| (*k, *v)).rev().collect();
         assert_eq!(expected, result);
@@ -116,7 +123,7 @@ mod test {
 
     #[test]
     fn empty_range_iter() {
-        let tree = PalmTree::load((0..1usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..1usize).map(|i| (i, i)));
         let expected = Vec::<(usize, usize)>::new();
         let result: Vec<_> = tree.range(0..0).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -124,7 +131,7 @@ mod test {
 
     #[test]
     fn wide_end_range_iter() {
-        let tree = PalmTree::load((0..1usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..1usize).map(|i| (i, i)));
         let expected = vec![(0usize, 0usize)];
         let result: Vec<_> = tree.range(0..255).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -132,7 +139,7 @@ mod test {
 
     #[test]
     fn wide_start_range_iter() {
-        let tree = PalmTree::load((0..1usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..1usize).map(|i| (i, i)));
         let expected: Vec<(usize, usize)> = vec![];
         let result: Vec<_> = tree.range(100..).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -141,7 +148,7 @@ mod test {
     #[test]
     #[should_panic]
     fn descending_range_iter() {
-        let tree = PalmTree::load((0..1usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..1usize).map(|i| (i, i)));
         let expected = Vec::<(usize, usize)>::new();
         let result: Vec<_> = tree.range(255..0).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -149,7 +156,7 @@ mod test {
 
     #[test]
     fn end_before_first_key_iter() {
-        let tree = PalmTree::load((1..2usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((1..2usize).map(|i| (i, i)));
         let expected: Vec<(usize, usize)> = vec![];
         let result: Vec<_> = tree.range(..0).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -157,7 +164,7 @@ mod test {
 
     #[test]
     fn start_after_last_key_iter() {
-        let tree = PalmTree::load((1..2usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((1..2usize).map(|i| (i, i)));
         let expected: Vec<(usize, usize)> = vec![];
         let result: Vec<_> = tree.range(3..).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -165,7 +172,7 @@ mod test {
 
     #[test]
     fn end_before_last_key_iter() {
-        let tree = PalmTree::load((0..2usize).map(|i| (i, i)));
+        let tree = StdPalmTree::load((0..2usize).map(|i| (i, i)));
         let expected: Vec<(usize, usize)> = vec![(0, 0)];
         let result: Vec<_> = tree.range(..=0).map(|(k, v)| (*k, *v)).collect();
         assert_eq!(expected, result);
@@ -173,7 +180,7 @@ mod test {
 
     #[test]
     fn range_with_deleted_max() {
-        let mut tree: PalmTree<u8, u8> = PalmTree::new();
+        let mut tree: StdPalmTree<u8, u8> = StdPalmTree::new();
         tree.insert(0, 0);
         tree.insert(1, 136);
         tree.remove(&1);
@@ -187,7 +194,7 @@ mod test {
 
     #[test]
     fn iterate_over_emptied_tree() {
-        let mut tree: PalmTree<u8, u8> = PalmTree::new();
+        let mut tree: StdPalmTree<u8, u8> = StdPalmTree::new();
         tree.insert(0, 0);
         tree.remove(&0);
         let result: Vec<(u8, u8)> = tree.iter().map(|(k, v)| (*k, *v)).collect();
@@ -267,7 +274,7 @@ mod test {
             (254, 242),
             (255, 54),
         ];
-        let tree: PalmTree<u8, u8> = PalmTree::load(input.clone().into_iter());
+        let tree: StdPalmTree<u8, u8> = StdPalmTree::load(input.clone().into_iter());
 
         // println!("{:?}", tree);
 

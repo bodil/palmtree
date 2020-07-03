@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::iter::FromIterator;
 
-use crate::PalmTree;
+use crate::{branch::node::Node, PalmTree};
 
 #[cfg(not(test))]
 use arbitrary::Arbitrary;
@@ -9,6 +10,8 @@ use arbitrary::Arbitrary;
 use proptest::proptest;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use sized_chunks::types::ChunkLength;
+use typenum::{IsGreater, U3};
 
 #[derive(Arbitrary, Debug)]
 pub enum Construct<K, V>
@@ -16,6 +19,7 @@ where
     K: Ord,
 {
     Empty,
+    FromIter(BTreeMap<K, V>),
     Insert(BTreeMap<K, V>),
     Load(BTreeMap<K, V>),
 }
@@ -26,20 +30,29 @@ pub enum Action<K, V> {
     Lookup(K),
     Remove(K),
     Range(Option<K>, Option<K>),
+    RangeMut(Option<K>, Option<K>),
 }
 
 pub type Input<K, V> = (Construct<K, V>, Vec<Action<K, V>>);
 
-pub fn integration_test(input: Input<u8, u8>) {
+pub fn integration_test<B, L>(input: Input<u8, u8>)
+where
+    B: ChunkLength<u8> + ChunkLength<Node<u8, u8, B, L>> + IsGreater<U3>,
+    L: ChunkLength<u8> + ChunkLength<u8> + IsGreater<U3>,
+{
     let (constructor, actions) = input;
 
-    let mut set;
+    let mut set: PalmTree<u8, u8, B, L>;
     let mut nat;
 
     match constructor {
         Construct::Empty => {
             set = PalmTree::new();
             nat = BTreeMap::new();
+        }
+        Construct::FromIter(map) => {
+            nat = map.clone();
+            set = PalmTree::from_iter(map.into_iter());
         }
         Construct::Insert(map) => {
             nat = map.clone();
@@ -104,10 +117,52 @@ pub fn integration_test(input: Input<u8, u8>) {
                 let actual: Vec<_> = set_iter.map(|(k, v)| (*k, *v)).collect();
                 assert_eq!(expected, actual);
             }
+            Action::RangeMut(left, right) => {
+                let set_iter;
+                let nat_iter;
+                match (left, right) {
+                    (Some(mut left), Some(mut right)) => {
+                        if left > right {
+                            std::mem::swap(&mut left, &mut right);
+                        }
+                        set_iter = set.range_mut(left..right);
+                        nat_iter = nat.range_mut(left..right);
+                    }
+                    (Some(left), None) => {
+                        set_iter = set.range_mut(left..);
+                        nat_iter = nat.range_mut(left..);
+                    }
+                    (None, Some(right)) => {
+                        set_iter = set.range_mut(..right);
+                        nat_iter = nat.range_mut(..right);
+                    }
+                    (None, None) => {
+                        set_iter = set.range_mut(..);
+                        nat_iter = nat.range_mut(..);
+                    }
+                }
+                let expected: Vec<_> = nat_iter.map(|(k, v)| (*k, *v)).collect();
+                let actual: Vec<_> = set_iter.map(|(k, v)| (*k, *v)).collect();
+                assert_eq!(expected, actual);
+            }
         }
+
+        // Check len()
         assert_eq!(nat.len(), set.len());
+
+        // Immutable ref iterator
         let expected: Vec<_> = nat.iter().map(|(k, v)| (*k, *v)).collect();
         let actual: Vec<_> = set.iter().map(|(k, v)| (*k, *v)).collect();
+        assert_eq!(expected, actual);
+
+        // Mutable ref iterator
+        let expected: Vec<_> = nat.iter_mut().map(|(k, v)| (*k, *v)).collect();
+        let actual: Vec<_> = set.iter_mut().map(|(k, v)| (*k, *v)).collect();
+        assert_eq!(expected, actual);
+
+        // Consuming iterator
+        let expected: Vec<_> = nat.clone().into_iter().collect();
+        let actual: Vec<_> = set.clone().into_iter().collect();
         assert_eq!(expected, actual);
     }
 }
@@ -116,6 +171,7 @@ pub fn integration_test(input: Input<u8, u8>) {
 proptest! {
     #[test]
     fn integration_proptest(input: Input<u8,u8>) {
-        integration_test(input);
+        use typenum::U64;
+        integration_test::<U64,U64>(input);
     }
 }

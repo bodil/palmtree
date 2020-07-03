@@ -1,21 +1,32 @@
-use crate::{branch::Branch, leaf::Leaf, search::PathedPointer, PalmTree};
+use crate::{
+    branch::{node::Node, Branch},
+    leaf::Leaf,
+    search::PathedPointer,
+    PalmTree,
+};
+use sized_chunks::types::ChunkLength;
 use std::fmt::{Debug, Error, Formatter};
+use typenum::{IsGreater, U3};
 
 #[derive(Debug)]
-pub enum Entry<'a, K, V>
+pub enum Entry<'a, K, V, B, L>
 where
     K: Ord + Clone,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
-    Vacant(VacantEntry<'a, K, V>),
-    Occupied(OccupiedEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V, B, L>),
+    Occupied(OccupiedEntry<'a, K, V, B, L>),
 }
 
-impl<'a, K, V> Entry<'a, K, V>
+impl<'a, K, V, B, L> Entry<'a, K, V, B, L>
 where
     K: Ord + Clone,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     #[inline(always)]
-    pub(crate) fn new(tree: &'a mut PalmTree<K, V>, key: K) -> Self {
+    pub(crate) fn new(tree: &'a mut PalmTree<K, V, B, L>, key: K) -> Self {
         if let Some(ref mut root) = tree.root {
             match PathedPointer::exact_key(root, &key) {
                 Ok(cursor) => Self::Occupied(OccupiedEntry { tree, cursor }),
@@ -33,19 +44,23 @@ where
 
 // Vacant entry
 
-pub struct VacantEntry<'a, K, V>
+pub struct VacantEntry<'a, K, V, B, L>
 where
     K: Ord + Clone,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
-    tree: &'a mut PalmTree<K, V>,
-    cursor: PathedPointer<&'a mut (K, V), K, V>,
+    tree: &'a mut PalmTree<K, V, B, L>,
+    cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
     key: K,
 }
 
-impl<'a, K, V> VacantEntry<'a, K, V>
+impl<'a, K, V, B, L> VacantEntry<'a, K, V, B, L>
 where
     K: 'a + Ord + Clone,
     V: 'a,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     pub fn key(&self) -> &K {
         &self.key
@@ -56,20 +71,19 @@ where
     }
 
     pub fn insert(mut self, value: V) -> &'a mut V {
+        // If the tree is empty, just insert a new node.
+        // Note that the tree could have an allocated root even when empty,
+        // and we're just ignoring that here on the assumption that it's better
+        // to avoid an extra null check on every insert than optimise for an infrequent use case.
+        if self.tree.is_empty() {
+            self.tree.root = Some(Branch::unit(Leaf::unit(self.key, value).into()).into());
+            self.tree.size = 1;
+            return &mut self.tree.root.as_mut().unwrap().get_leaf_mut(0).values[0];
+        }
         let result = if self.cursor.is_null() {
-            // If the tree is empty, just insert a new node.
-            // Note that the tree could have an allocated root even when empty,
-            // and we're just ignoring that here on the assumption that it's better
-            // to avoid an extra null check on every insert than optimise for an infrequent use case.
-            if self.tree.is_empty() {
-                self.tree.root = Some(Branch::unit(Leaf::unit(self.key, value).into()).into());
-                self.tree.size = 1;
-                return &mut self.tree.root.as_mut().unwrap().get_leaf_mut(0).values[0];
-            } else {
-                unsafe {
-                    self.cursor
-                        .push_last(self.tree.root.as_mut().unwrap(), self.key, value)
-                }
+            unsafe {
+                self.cursor
+                    .push_last(self.tree.root.as_mut().unwrap(), self.key, value)
             }
         } else {
             unsafe { self.cursor.insert(self.key, value) }
@@ -91,10 +105,12 @@ where
     }
 }
 
-impl<'a, K, V> Debug for VacantEntry<'a, K, V>
+impl<'a, K, V, B, L> Debug for VacantEntry<'a, K, V, B, L>
 where
     K: Ord + Clone + Debug,
     V: Debug,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "VacantEntry({:?})", self.key())
@@ -103,18 +119,22 @@ where
 
 // Occupied entry
 
-pub struct OccupiedEntry<'a, K, V>
+pub struct OccupiedEntry<'a, K, V, B, L>
 where
     K: Ord + Clone,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
-    tree: &'a mut PalmTree<K, V>,
-    cursor: PathedPointer<&'a mut (K, V), K, V>,
+    tree: &'a mut PalmTree<K, V, B, L>,
+    cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
 }
 
-impl<'a, K, V> OccupiedEntry<'a, K, V>
+impl<'a, K, V, B, L> OccupiedEntry<'a, K, V, B, L>
 where
     K: 'a + Ord + Clone,
     V: 'a,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     pub fn key(&self) -> &K {
         unsafe { self.cursor.key() }.unwrap()
@@ -146,10 +166,12 @@ where
     }
 }
 
-impl<'a, K, V> Debug for OccupiedEntry<'a, K, V>
+impl<'a, K, V, B, L> Debug for OccupiedEntry<'a, K, V, B, L>
 where
     K: Ord + Clone + Debug,
     V: Debug,
+    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "OccupiedEntry({:?} => {:?})", self.key(), self.get())
@@ -159,11 +181,12 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::StdPalmTree;
     use std::iter::FromIterator;
 
     #[test]
     fn insert_with_entry() {
-        let mut tree: PalmTree<usize, usize> = PalmTree::new();
+        let mut tree: StdPalmTree<usize, usize> = PalmTree::new();
         let size = 131_072;
         for i in 0..size {
             match tree.entry(i) {
@@ -183,7 +206,7 @@ mod test {
     #[test]
     fn delete_with_entry() {
         let size = 131_072;
-        let mut tree: PalmTree<usize, usize> = PalmTree::from_iter((0..size).map(|i| (i, i)));
+        let mut tree: StdPalmTree<usize, usize> = PalmTree::from_iter((0..size).map(|i| (i, i)));
         for i in 0..size {
             match tree.entry(i) {
                 Entry::Vacant(_entry) => {

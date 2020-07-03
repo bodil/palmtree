@@ -1,15 +1,21 @@
-use crate::types::LeafSize;
-use sized_chunks::Chunk;
+use sized_chunks::{types::ChunkLength, Chunk};
 use std::fmt::{Debug, Error, Formatter};
+use typenum::{IsGreater, U3};
 
 /// A leaf node contains an ordered sequence of direct mappings from keys to values.
 #[derive(Clone)]
-pub(crate) struct Leaf<K, V> {
-    pub(crate) keys: Chunk<K, LeafSize>,
-    pub(crate) values: Chunk<V, LeafSize>,
+pub(crate) struct Leaf<K, V, L>
+where
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+{
+    pub(crate) keys: Chunk<K, L>,
+    pub(crate) values: Chunk<V, L>,
 }
 
-impl<K, V> Leaf<K, V> {
+impl<K, V, L> Leaf<K, V, L>
+where
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+{
     pub(crate) fn new() -> Self {
         Leaf {
             keys: Chunk::new(),
@@ -44,7 +50,7 @@ impl<K, V> Leaf<K, V> {
         &self.keys
     }
 
-    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V>>, Box<Leaf<K, V>>) {
+    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V, L>>, Box<Leaf<K, V, L>>) {
         let half = self.keys.len() / 2;
         let left = Box::new(Leaf {
             keys: Chunk::from_front(&mut self.keys, half),
@@ -54,9 +60,10 @@ impl<K, V> Leaf<K, V> {
     }
 }
 
-impl<K, V> Leaf<K, V>
+impl<K, V, L> Leaf<K, V, L>
 where
     K: Clone + Ord,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     pub(crate) fn get(&self, key: &K) -> Option<&V> {
         self.keys
@@ -83,10 +90,11 @@ where
     }
 }
 
-impl<K, V> Debug for Leaf<K, V>
+impl<K, V, L> Debug for Leaf<K, V, L>
 where
     K: Debug,
     V: Debug,
+    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         let pairs: Vec<_> = self.keys.iter().zip(self.values.iter()).collect();
