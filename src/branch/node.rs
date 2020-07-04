@@ -1,5 +1,5 @@
 use crate::{branch::Branch, leaf::Leaf};
-use sized_chunks::types::ChunkLength;
+use generic_array::ArrayLength;
 use std::{
     fmt::{Debug, Error, Formatter},
     marker::PhantomData,
@@ -23,9 +23,10 @@ impl<K, V, B, L> Drop for Node<K, V, B, L> {
 
 impl<K, V, B, L> From<Box<Leaf<K, V, L>>> for Node<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
+    #[inline(always)]
     fn from(node: Box<Leaf<K, V, L>>) -> Self {
         let ptr: NonNull<Leaf<K, V, L>> = Box::leak(node).into();
         Self {
@@ -37,9 +38,10 @@ where
 
 impl<K, V, B, L> From<Box<Branch<K, V, B, L>>> for Node<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
+    #[inline(always)]
     fn from(node: Box<Branch<K, V, B, L>>) -> Self {
         let ptr: NonNull<Branch<K, V, B, L>> = Box::leak(node).into();
         Self {
@@ -52,8 +54,8 @@ where
 impl<K, V, B, L> Node<K, V, B, L> {
     pub(crate) unsafe fn unwrap_branch(self) -> Box<Branch<K, V, B, L>>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let out = Box::from_raw(self.node.as_ptr().cast());
         std::mem::forget(self);
@@ -62,55 +64,59 @@ impl<K, V, B, L> Node<K, V, B, L> {
 
     pub(crate) unsafe fn unwrap_leaf(self) -> Box<Leaf<K, V, L>>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let out = Box::from_raw(self.node.as_ptr().cast());
         std::mem::forget(self);
         out
     }
 
+    #[inline(always)]
     pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V, B, L>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let ptr: *const Branch<K, V, B, L> = self.node.cast().as_ptr();
-        ptr.as_ref().unwrap()
+        &*ptr
     }
 
+    #[inline(always)]
     pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V, L>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let ptr: *const Leaf<K, V, L> = self.node.cast().as_ptr();
-        ptr.as_ref().unwrap()
+        &*ptr
     }
 
+    #[inline(always)]
     pub(crate) unsafe fn as_branch_mut(&mut self) -> &mut Branch<K, V, B, L>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let ptr: *mut Branch<K, V, B, L> = self.node.cast().as_ptr();
-        ptr.as_mut().unwrap()
+        &mut *ptr
     }
 
+    #[inline(always)]
     pub(crate) unsafe fn as_leaf_mut(&mut self) -> &mut Leaf<K, V, L>
     where
-        B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
     {
         let ptr: *mut Leaf<K, V, L> = self.node.cast().as_ptr();
-        ptr.as_mut().unwrap()
+        &mut *ptr
     }
 }
 
 impl<K, V, B, L> Debug for Node<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "Node[...]")

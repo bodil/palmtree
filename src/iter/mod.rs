@@ -1,7 +1,7 @@
 #![allow(unreachable_pub)] // pub exports below erroneously complain without this
 
 use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use sized_chunks::types::ChunkLength;
+use generic_array::ArrayLength;
 use std::{
     cmp::Ordering,
     ops::{Bound, RangeBounds},
@@ -30,8 +30,8 @@ fn paths_from_range<'a, Lifetime, K, V, B, L, R>(
 where
     K: Clone + Ord,
     R: RangeBounds<K>,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     match (range.start_bound(), range.end_bound()) {
         (Bound::Excluded(left), Bound::Excluded(right)) if left == right => {

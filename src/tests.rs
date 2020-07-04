@@ -6,11 +6,11 @@ use crate::{branch::node::Node, PalmTree};
 
 #[cfg(not(test))]
 use arbitrary::Arbitrary;
+use generic_array::ArrayLength;
 #[cfg(test)]
 use proptest::proptest;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
-use sized_chunks::types::ChunkLength;
 use typenum::{IsGreater, U3};
 
 #[derive(Arbitrary, Debug)]
@@ -37,8 +37,8 @@ pub type Input<K, V> = (Construct<K, V>, Vec<Action<K, V>>);
 
 pub fn integration_test<B, L>(input: Input<u8, u8>)
 where
-    B: ChunkLength<u8> + ChunkLength<Node<u8, u8, B, L>> + IsGreater<U3>,
-    L: ChunkLength<u8> + ChunkLength<u8> + IsGreater<U3>,
+    B: ArrayLength<u8> + ArrayLength<Node<u8, u8, B, L>> + IsGreater<U3>,
+    L: ArrayLength<u8> + ArrayLength<u8> + IsGreater<U3>,
 {
     let (constructor, actions) = input;
 

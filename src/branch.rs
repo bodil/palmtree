@@ -1,45 +1,48 @@
 use crate::{
+    array::Array,
     leaf::Leaf,
     search::{find_key, find_key_linear},
+    InsertResult,
 };
+use generic_array::ArrayLength;
 use node::Node;
-use sized_chunks::{types::ChunkLength, Chunk};
 use std::fmt::{Debug, Error, Formatter};
-use typenum::{IsGreater, U2, U3};
+use typenum::{IsGreater, U3};
 
 // Never leak this monster to the rest of the crate.
 pub(crate) mod node;
 
-const fn max_height(_b: usize) -> usize {
-    16 // FIXME hardcoding this for now
-}
-
 /// A branch node holds mappings of high keys to child nodes.
 pub(crate) struct Branch<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
-    height: usize,
-    pub(crate) keys: Chunk<K, B>,
-    children: Chunk<Node<K, V, B, L>, B>,
+    has_branches: bool,
+    length: usize,
+    keys: Array<K, B>,
+    children: Array<Node<K, V, B, L>, B>,
 }
 
 impl<K, V, B, L> Drop for Branch<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn drop(&mut self) {
-        while !self.children.is_empty() {
-            // The `Node` type can't drop itself because it doesn't know
-            // whether it's a Branch or a Leaf, so we *must* drop every `Node`
-            // from the `Branch` it's stored in.
-            let node = self.children.pop_front();
-            if self.height > 1 {
-                unsafe { node.unwrap_branch() };
-            } else {
-                unsafe { node.unwrap_leaf() };
+        unsafe {
+            self.keys.drop(self.length);
+            while self.length > 0 {
+                // The `Node` type can't drop itself because it doesn't know
+                // whether it's a Branch or a Leaf, so we *must* drop every `Node`
+                // from the `Branch` it's stored in.
+                let node = self.children.pop(self.length);
+                self.length -= 1;
+                if self.has_branches() {
+                    node.unwrap_branch();
+                } else {
+                    node.unwrap_leaf();
+                }
             }
         }
     }
@@ -49,25 +52,24 @@ impl<K, V, B, L> Clone for Branch<K, V, B, L>
 where
     K: Clone,
     V: Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn clone(&self) -> Self {
-        let mut children = Chunk::new();
-        if self.has_branches() {
-            for node in &self.children {
-                let branch = Box::new(unsafe { node.as_branch() }.clone());
-                children.push_back(branch.into());
+        let children = unsafe {
+            if self.has_branches() {
+                self.children.clone_with(self.length, |node| {
+                    Box::new(node.as_branch().clone()).into()
+                })
+            } else {
+                self.children
+                    .clone_with(self.length, |node| Box::new(node.as_leaf().clone()).into())
             }
-        } else {
-            for node in &self.children {
-                let leaf = Box::new(unsafe { node.as_leaf() }.clone());
-                children.push_back(leaf.into());
-            }
-        }
+        };
         Self {
-            height: self.height,
-            keys: self.keys.clone(),
+            has_branches: self.has_branches,
+            length: self.length,
+            keys: unsafe { self.keys.clone(self.length) },
             children,
         }
     }
@@ -75,151 +77,255 @@ where
 
 impl<K, V, B, L> Branch<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
-    pub(crate) fn new(height: usize) -> Self {
-        debug_assert!(height <= max_height(B::USIZE));
+    #[inline(always)]
+    pub(crate) fn new(has_branches: bool) -> Self {
         Branch {
-            height,
-            keys: Chunk::new(),
-            children: Chunk::new(),
+            has_branches,
+            length: 0,
+            keys: Array::new(),
+            children: Array::new(),
         }
     }
 
+    #[inline(always)]
     pub(crate) fn len(&self) -> usize {
-        self.keys.len()
+        self.length
     }
 
+    #[inline(always)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.len() == 0
     }
 
+    #[inline(always)]
     pub(crate) fn is_full(&self) -> bool {
-        self.keys.is_full()
+        self.len() == B::USIZE
     }
 
+    #[inline(always)]
     pub(crate) fn highest(&self) -> &K {
-        self.keys.last().unwrap()
+        &self.keys()[self.len() - 1]
     }
 
+    #[inline(always)]
     pub(crate) fn has_leaves(&self) -> bool {
-        self.height == 1
+        !self.has_branches()
     }
 
+    #[inline(always)]
     pub(crate) fn has_branches(&self) -> bool {
-        self.height > 1
+        self.has_branches
     }
 
-    pub(crate) fn height(&self) -> usize {
-        self.height
-    }
-
+    #[inline(always)]
     pub(crate) fn keys(&self) -> &[K] {
-        &self.keys
+        unsafe { self.keys.deref(self.length) }
     }
 
+    #[inline(always)]
+    pub(crate) fn keys_mut(&mut self) -> &mut [K] {
+        unsafe { self.keys.deref_mut(self.length) }
+    }
+
+    #[inline(always)]
+    fn children(&self) -> &[Node<K, V, B, L>] {
+        unsafe { self.children.deref(self.length) }
+    }
+
+    #[inline(always)]
+    fn children_mut(&mut self) -> &mut [Node<K, V, B, L>] {
+        unsafe { self.children.deref_mut(self.length) }
+    }
+
+    #[inline(always)]
     pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V, B, L> {
         debug_assert!(self.has_branches());
-        unsafe { self.children[index].as_branch() }
+        unsafe { self.children()[index].as_branch() }
     }
 
+    #[inline(always)]
+    pub(crate) unsafe fn get_branch_unchecked(&self, index: usize) -> &Branch<K, V, B, L> {
+        debug_assert!(self.has_branches());
+        debug_assert!(self.len() > index);
+        self.children().get_unchecked(index).as_branch()
+    }
+
+    #[inline(always)]
     pub(crate) fn get_leaf(&self, index: usize) -> &Leaf<K, V, L> {
         debug_assert!(self.has_leaves());
-        unsafe { self.children[index].as_leaf() }
+        unsafe { self.children()[index].as_leaf() }
     }
 
+    #[inline(always)]
+    pub(crate) unsafe fn get_leaf_unchecked(&self, index: usize) -> &Leaf<K, V, L> {
+        debug_assert!(self.has_leaves());
+        debug_assert!(self.len() > index);
+        self.children().get_unchecked(index).as_leaf()
+    }
+
+    #[inline(always)]
     pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Branch<K, V, B, L> {
         debug_assert!(self.has_branches());
-        unsafe { self.children[index].as_branch_mut() }
+        unsafe { self.children_mut()[index].as_branch_mut() }
     }
 
+    #[inline(always)]
     pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V, L> {
         debug_assert!(self.has_leaves());
-        unsafe { self.children[index].as_leaf_mut() }
+        unsafe { self.children_mut()[index].as_leaf_mut() }
     }
 
-    pub(crate) fn push_key(&mut self, key: K) {
-        self.keys.push_back(key)
-    }
-
-    pub(crate) fn insert_key(&mut self, index: usize, key: K) {
-        self.keys.insert(index, key)
-    }
-
-    pub(crate) fn push_branch(&mut self, branch: Box<Branch<K, V, B, L>>) {
+    #[inline(always)]
+    pub(crate) fn push_branch(&mut self, key: K, branch: Box<Branch<K, V, B, L>>) {
         debug_assert!(self.has_branches());
-        self.children.push_back(branch.into())
+        debug_assert!(!self.is_full());
+        unsafe {
+            self.keys.push(self.length, key);
+            self.children.push(self.length, branch.into());
+        }
+        self.length += 1;
     }
 
-    pub(crate) fn push_leaf(&mut self, leaf: Box<Leaf<K, V, L>>) {
+    #[inline(always)]
+    pub(crate) fn push_leaf(&mut self, key: K, leaf: Box<Leaf<K, V, L>>) {
         debug_assert!(self.has_leaves());
-        self.children.push_back(leaf.into())
+        debug_assert!(!self.is_full());
+        unsafe {
+            self.keys.push(self.length, key);
+            self.children.push(self.length, leaf.into());
+        }
+        self.length += 1;
     }
 
-    pub(crate) fn remove_key(&mut self, index: usize) -> K {
-        self.keys.remove(index)
-    }
-
-    pub(crate) fn remove_branch(&mut self, index: usize) -> Box<Branch<K, V, B, L>> {
+    #[inline(always)]
+    pub(crate) fn remove_branch(&mut self, index: usize) -> (K, Box<Branch<K, V, B, L>>) {
         debug_assert!(self.has_branches());
-        unsafe { self.children.remove(index).unwrap_branch() }
+        debug_assert!(index < self.length);
+        let result = unsafe {
+            (
+                self.keys.remove(self.length, index),
+                self.children.remove(self.length, index).unwrap_branch(),
+            )
+        };
+        self.length -= 1;
+        result
     }
 
-    pub(crate) fn remove_leaf(&mut self, index: usize) -> Box<Leaf<K, V, L>> {
+    #[inline(always)]
+    pub(crate) fn remove_leaf(&mut self, index: usize) -> (K, Box<Leaf<K, V, L>>) {
         debug_assert!(self.has_leaves());
-        unsafe { self.children.remove(index).unwrap_leaf() }
+        debug_assert!(index < self.length);
+        let result = unsafe {
+            (
+                self.keys.remove(self.length, index),
+                self.children.remove(self.length, index).unwrap_leaf(),
+            )
+        };
+        self.length -= 1;
+        result
     }
 
-    pub(crate) fn remove_last_branch(&mut self) -> Box<Branch<K, V, B, L>> {
+    #[inline(always)]
+    pub(crate) fn remove_last_branch(&mut self) -> (K, Box<Branch<K, V, B, L>>) {
         debug_assert!(self.has_branches());
-        unsafe { self.children.pop_back().unwrap_branch() }
+        debug_assert!(!self.is_empty());
+        let result = unsafe {
+            (
+                self.keys.pop(self.length),
+                self.children.pop(self.length).unwrap_branch(),
+            )
+        };
+        self.length -= 1;
+        result
     }
 
-    pub(crate) fn insert_branch_pair(
+    #[inline(always)]
+    pub(crate) fn push_branch_pair(
         &mut self,
-        index: usize,
+        left_key: K,
         left: Box<Branch<K, V, B, L>>,
+        right_key: K,
         right: Box<Branch<K, V, B, L>>,
     ) {
         debug_assert!(self.has_branches());
-        self.children
-            .insert_from(index, Chunk::<_, U2>::pair(left.into(), right.into()));
+        debug_assert!(self.len() + 2 <= B::USIZE);
+        unsafe {
+            self.keys
+                .insert_pair(self.length, self.length, left_key, right_key);
+            self.children
+                .insert_pair(self.length, self.length, left.into(), right.into());
+        }
+        self.length += 2;
     }
 
+    #[inline(always)]
+    pub(crate) fn insert_branch_pair(
+        &mut self,
+        index: usize,
+        left_key: K,
+        left: Box<Branch<K, V, B, L>>,
+        right_key: K,
+        right: Box<Branch<K, V, B, L>>,
+    ) {
+        debug_assert!(self.has_branches());
+        debug_assert!(self.len() + 2 <= B::USIZE);
+        unsafe {
+            self.keys
+                .insert_pair(self.length, index, left_key, right_key);
+            self.children
+                .insert_pair(self.length, index, left.into(), right.into());
+        }
+        self.length += 2;
+    }
+
+    #[inline(always)]
     pub(crate) fn insert_leaf_pair(
         &mut self,
         index: usize,
+        left_key: K,
         left: Box<Leaf<K, V, L>>,
+        right_key: K,
         right: Box<Leaf<K, V, L>>,
     ) {
         debug_assert!(self.has_leaves());
-        self.children
-            .insert_from(index, Chunk::<_, U2>::pair(left.into(), right.into()));
+        debug_assert!(self.len() + 2 <= B::USIZE);
+        unsafe {
+            self.keys
+                .insert_pair(self.length, index, left_key, right_key);
+            self.children
+                .insert_pair(self.length, index, left.into(), right.into());
+        }
+        self.length += 2;
     }
 
     pub(crate) fn split(mut self: Box<Self>) -> (Box<Branch<K, V, B, L>>, Box<Branch<K, V, B, L>>) {
-        let half = self.keys.len() / 2;
-        let left = Box::new(Branch {
-            height: self.height,
-            keys: Chunk::from_front(&mut self.keys, half),
-            children: Chunk::from_front(&mut self.children, half),
+        let half = self.len() / 2;
+        let right = Box::new(Branch {
+            has_branches: self.has_branches,
+            length: half,
+            keys: unsafe { Array::steal_from(&mut self.keys, self.length, half) },
+            children: unsafe { Array::steal_from(&mut self.children, self.length, half) },
         });
-        (left, self)
+        self.length -= half;
+        (self, right)
     }
 }
 
 impl<K, V, B, L> Branch<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     pub(crate) fn unit(leaf: Box<Leaf<K, V, L>>) -> Self {
         Branch {
-            height: 1,
-            keys: Chunk::unit(leaf.highest().clone()),
-            children: Chunk::unit(leaf.into()),
+            has_branches: false,
+            length: 1,
+            keys: unsafe { Array::unit(leaf.highest().clone()) },
+            children: unsafe { Array::unit(leaf.into()) },
         }
     }
 
@@ -227,7 +333,7 @@ where
     pub(crate) fn get_linear(&self, key: &K) -> Option<&V> {
         let mut branch = self;
         loop {
-            if let Some(index) = find_key_linear(&branch.keys, key) {
+            if let Some(index) = find_key_linear(branch.keys(), key) {
                 if branch.has_branches() {
                     branch = branch.get_branch(index);
                 } else {
@@ -242,7 +348,7 @@ where
     pub(crate) fn get(&self, key: &K) -> Option<&V> {
         let mut branch = self;
         loop {
-            if let Some(index) = find_key(&branch.keys, key) {
+            if let Some(index) = find_key(branch.keys(), key) {
                 if branch.has_branches() {
                     branch = branch.get_branch(index);
                 } else {
@@ -260,7 +366,7 @@ where
             if branch.is_empty() {
                 return None;
             }
-            if let Some(index) = find_key(&branch.keys, key) {
+            if let Some(index) = find_key(branch.keys(), key) {
                 if branch.has_branches() {
                     branch = branch.get_branch_mut(index);
                 } else {
@@ -271,22 +377,96 @@ where
             }
         }
     }
+
+    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertResult<K, V> {
+        // TODO: this algorithm could benefit from the addition of neighbour
+        // checking to reduce splitting.
+        if let Some(index) = find_key(self.keys(), &key) {
+            // We have found a key match, attempt to insert into the matching child.
+            let (key, value) = {
+                let result = if self.has_branches() {
+                    self.get_branch_mut(index).insert(key, value)
+                } else {
+                    self.get_leaf_mut(index).insert(key, value)
+                };
+                match result {
+                    InsertResult::Full(key, value) => (key, value),
+                    result => return result,
+                }
+            };
+            // Fall through from match = child is full and needs to be split.
+            if self.is_full() {
+                // Current branch is full, needs to split further up.
+                InsertResult::Full(key, value)
+            } else if self.has_branches() {
+                // Split the child branch and retry insertion from here.
+                // FIXME should determine which of the split branches to insert into instead of rechecking from the parent branch.
+                // Same for leaf splitting below, and splitting in >max case further below.
+                let (removed_key, removed_branch) = self.remove_branch(index);
+                let (left, right) = removed_branch.split();
+                self.insert_branch_pair(index, left.highest().clone(), left, removed_key, right);
+                self.insert(key, value)
+            } else {
+                let (removed_key, removed_leaf) = self.remove_leaf(index);
+                let (left, right) = removed_leaf.split();
+                self.insert_leaf_pair(index, left.highest().clone(), left, removed_key, right);
+                self.insert(key, value)
+            }
+        } else {
+            // No key match, which means the key is higher than the current max, so we insert along the right edge.
+            let end_index = self.len() - 1;
+            let (key, value) = {
+                if self.has_branches() {
+                    self.keys_mut()[end_index] = key.clone();
+                    match self.get_branch_mut(end_index).insert(key, value) {
+                        InsertResult::Full(key, value) => (key, value),
+                        result => return result,
+                    }
+                } else {
+                    let leaf = self.get_leaf_mut(end_index);
+                    if !leaf.is_full() {
+                        unsafe { leaf.push_unchecked(key.clone(), value) };
+                        self.keys_mut()[end_index] = key;
+                        return InsertResult::Added;
+                    }
+                    (key, value)
+                }
+            };
+            if self.is_full() {
+                InsertResult::Full(key, value)
+            } else if self.has_branches() {
+                let (removed_key, removed_branch) = self.remove_last_branch();
+                let (left, right) = removed_branch.split();
+                self.push_branch_pair(left.highest().clone(), left, removed_key, right);
+                self.insert(key, value)
+            } else {
+                let leaf = Box::new(Leaf::unit(key.clone(), value));
+                self.push_leaf(key, leaf);
+                InsertResult::Added
+            }
+        }
+    }
 }
 
 impl<K, V, B, L> Branch<K, V, B, L>
 where
     K: Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn tree_fmt(&self, f: &mut Formatter<'_>, level: usize) -> Result<(), Error> {
         let mut indent = String::new();
         for _ in 0..level {
             indent += "    ";
         }
-        writeln!(f, "{}Branch(height = {})", indent, self.height)?;
-        for (index, key) in self.keys.iter().enumerate() {
+        writeln!(
+            f,
+            "{}Branch(has_branches = {})",
+            indent,
+            self.has_branches()
+        )?;
+        for (index, key) in self.keys().iter().enumerate() {
             if self.has_branches() {
                 writeln!(f, "{}  [{:?}]:", indent, key)?;
                 self.get_branch(index).tree_fmt(f, level + 1)?;
@@ -302,8 +482,8 @@ impl<K, V, B, L> Debug for Branch<K, V, B, L>
 where
     K: Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         self.tree_fmt(f, 0)

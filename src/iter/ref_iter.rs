@@ -1,6 +1,6 @@
 use super::paths_from_range;
 use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use sized_chunks::types::ChunkLength;
+use generic_array::ArrayLength;
 use std::{
     cmp::Ordering,
     fmt::{Debug, Error, Formatter},
@@ -11,8 +11,8 @@ use typenum::{IsGreater, U3};
 
 pub struct Iter<'a, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     left: PathedPointer<&'a (K, V), K, V, B, L>,
     right: PathedPointer<&'a (K, V), K, V, B, L>,
@@ -21,8 +21,8 @@ where
 impl<'a, K, V, B, L> Clone for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -35,8 +35,8 @@ where
 impl<'a, K, V, B, L> Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn null() -> Self {
         Self {
@@ -94,8 +94,8 @@ where
 impl<'a, K, V, B, L> Iterator for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -122,8 +122,8 @@ where
 impl<'a, K, V, B, L> DoubleEndedIterator for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -149,8 +149,8 @@ where
 impl<'a, K, V, B, L> FusedIterator for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
 }
 
@@ -158,8 +158,8 @@ impl<'a, K, V, B, L> Debug for Iter<'a, K, V, B, L>
 where
     K: Clone + Ord + Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.clone()).finish()

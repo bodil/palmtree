@@ -1,11 +1,14 @@
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
-use palmtree::StdPalmTree as PalmTree;
+use palmtree::PalmTree as RawPalmTree;
 use rand::prelude::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
+use typenum::U64;
+
+type PalmTree<K, V> = RawPalmTree<K, V, U64, U64>;
 
 const SIZES: &[usize] = &[64, 256, 1024, 4096, 16384, 32768, 65536];
 // const SIZES: &[usize] = &[256, 65536];
@@ -178,18 +181,18 @@ fn lookup(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-        group.bench_with_input(BenchmarkId::new("b+tree/linear", size), size, |b, &size| {
-            b.iter_batched_ref(
-                || PalmTree::<usize, usize>::load((0..size).map(|i| (i, i))),
-                |map| {
-                    for i in 0..size {
-                        black_box(map.get_linear(&i));
-                    }
-                },
-                BatchSize::SmallInput,
-            )
-        });
-        group.bench_with_input(BenchmarkId::new("b+tree/binary", size), size, |b, &size| {
+        // group.bench_with_input(BenchmarkId::new("b+tree/linear", size), size, |b, &size| {
+        //     b.iter_batched_ref(
+        //         || PalmTree::<usize, usize>::load((0..size).map(|i| (i, i))),
+        //         |map| {
+        //             for i in 0..size {
+        //                 black_box(map.get_linear(&i));
+        //             }
+        //         },
+        //         BatchSize::SmallInput,
+        //     )
+        // });
+        group.bench_with_input(BenchmarkId::new("b+tree", size), size, |b, &size| {
             b.iter_batched_ref(
                 || PalmTree::<usize, usize>::load((0..size).map(|i| (i, i))),
                 |map| {
@@ -300,7 +303,7 @@ fn branchless_binary_search<K: Ord>(keys: &[K], key: &K) -> usize {
 }
 
 pub fn search_strategies(c: &mut Criterion) {
-    let mut group = c.benchmark_group("search_strategies/cmove");
+    let mut group = c.benchmark_group("search_strategies");
     for size in &[8, 16, 32, 64, 128, 256usize] {
         let keys = Vec::<u64>::from_iter(0..(*size as u64));
         group.bench_with_input(BenchmarkId::new("binary", size), size, |b, &size| {

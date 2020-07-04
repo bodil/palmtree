@@ -3,14 +3,16 @@ use crate::{
     branch::{node::Node, Branch},
     leaf::Leaf,
 };
-use sized_chunks::{types::ChunkLength, Chunk};
+use arrayvec::ArrayVec;
+use generic_array::ArrayLength;
 use std::{
     fmt::{Debug, Error, Formatter},
     marker::PhantomData,
 };
-use typenum::{IsGreater, U16, U3};
+use typenum::{IsGreater, U3};
 
-type PtrPath<K, V, B, L> = Chunk<(*const Branch<K, V, B, L>, isize), U16>; // FIXME hardcoded max height of 16
+// type PtrPath<K, V, B, L> = Chunk<(*const Branch<K, V, B, L>, isize), U16>; // FIXME hardcoded max height of 16
+type PtrPath<K, V, B, L> = ArrayVec<[(*const Branch<K, V, B, L>, isize); 16]>;
 
 pub(crate) fn find_key_linear<K>(keys: &[K], target: &K) -> Option<usize>
 where
@@ -107,8 +109,8 @@ where
 /// A pointer to a leaf entry which can be stepped forwards and backwards.
 pub(crate) struct PathedPointer<Lifetime, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     stack: PtrPath<K, V, B, L>,
     leaf: *const Leaf<K, V, L>,
@@ -118,8 +120,8 @@ where
 
 impl<Lifetime, K, V, B, L> Clone for PathedPointer<Lifetime, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -138,16 +140,16 @@ fn walk_path<'a, K, V, B, L>(
 ) -> Option<&'a Leaf<K, V, L>>
 where
     K: Clone + Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     loop {
         if let Some(index) = find_key(branch.keys(), key) {
-            path.push_back((branch, index as isize));
-            if branch.height() > 1 {
-                branch = branch.get_branch(index);
+            path.push((branch, index as isize));
+            if branch.has_branches() {
+                branch = unsafe { branch.get_branch_unchecked(index) };
             } else {
-                return Some(branch.get_leaf(index));
+                return Some(unsafe { branch.get_leaf_unchecked(index) });
             }
         } else {
             return None;
@@ -162,22 +164,22 @@ fn path_for<'a, K, V, B, L>(
 ) -> Option<(PtrPath<K, V, B, L>, &'a Leaf<K, V, L>)>
 where
     K: Clone + Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
-    let mut path: PtrPath<K, V, B, L> = Chunk::new();
+    let mut path: PtrPath<K, V, B, L> = ArrayVec::new();
     walk_path(tree, key, &mut path).map(|leaf| (path, leaf))
 }
 
 impl<Lifetime, K, V, B, L> PathedPointer<Lifetime, K, V, B, L>
 where
     K: Clone + Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     pub(crate) fn null() -> Self {
         Self {
-            stack: Chunk::new(),
+            stack: ArrayVec::new(),
             leaf: std::ptr::null(),
             index: 0,
             lifetime: PhantomData,
@@ -221,7 +223,7 @@ where
             // If we do, we can depend on the next neighbour node containing the right key as its first
             // entry.
             unsafe {
-                if ptr.key().unwrap() < key && !ptr.step_forward() {
+                if ptr.key_unchecked() < key && !ptr.step_forward() {
                     // If we can't step forward, we were at the highest key already, so the iterator is empty.
                     ptr = Self::null();
                 }
@@ -240,7 +242,7 @@ where
             ptr.index = find_key_or_next(leaf.keys(), key);
             ptr.leaf = leaf;
             unsafe {
-                if &leaf.keys()[ptr.index] == key && !ptr.step_forward() {
+                if leaf.keys().get_unchecked(ptr.index) == key && !ptr.step_forward() {
                     // If we can't step forward, we were at the highest key already, so the iterator is empty.
                     return Self::null();
                 }
@@ -275,7 +277,7 @@ where
             // If we've found a value equal to key, we step back one key.
             // If we've found a value higher than key, we're one branch ahead of the target key and step back.
             unsafe {
-                if &leaf.keys()[ptr.index] >= key && !ptr.step_back() {
+                if leaf.keys().get_unchecked(ptr.index) >= key && !ptr.step_back() {
                     // If we can't step back, we were at the lowest key already, so the iterator is empty.
                     return Self::null();
                 }
@@ -295,13 +297,13 @@ where
             if branch.is_empty() {
                 return Self::null();
             }
-            stack.push_back((branch, 0));
+            stack.push((branch, 0));
             if branch.has_branches() {
-                branch = branch.get_branch(0);
+                branch = unsafe { branch.get_branch_unchecked(0) };
             } else {
                 return Self {
                     stack,
-                    leaf: branch.get_leaf(0),
+                    leaf: unsafe { branch.get_leaf_unchecked(0) },
                     index: 0,
                     lifetime: PhantomData,
                 };
@@ -318,11 +320,11 @@ where
                 return Self::null();
             }
             let index = branch.len() - 1;
-            stack.push_back((branch, index as isize));
+            stack.push((branch, index as isize));
             if branch.has_branches() {
-                branch = branch.get_branch(index);
+                branch = unsafe { branch.get_branch_unchecked(index) };
             } else {
-                let leaf = branch.get_leaf(index);
+                let leaf = unsafe { branch.get_leaf_unchecked(index) };
                 return Self {
                     stack,
                     leaf,
@@ -343,25 +345,24 @@ where
             if self.index >= (*self.leaf).keys().len() {
                 loop {
                     // Pop a branch off the top of the stack and examine it.
-                    if !self.stack.is_empty() {
-                        let (branch, mut index) = self.stack.pop_back();
+                    if let Some((branch, mut index)) = self.stack.pop() {
                         index += 1;
                         if index < (*branch).len() as isize {
                             // If we're not at the end yet, push the branch back on the stack and look at the next child.
-                            self.stack.push_back((branch, index));
+                            self.stack.push((branch, index));
                             if (*branch).has_branches() {
                                 // If it's a branch, push it on the stack and go through the loop again with this branch.
                                 self.stack
-                                    .push_back(((*branch).get_branch(index as usize), -1));
+                                    .push(((*branch).get_branch_unchecked(index as usize), -1));
                                 continue;
                             } else {
                                 // If it's a leaf, this is our new leaf, we're done.
-                                self.leaf = (*branch).get_leaf(index as usize);
+                                self.leaf = (*branch).get_leaf_unchecked(index as usize);
                                 self.index = 0;
                                 // Prefetch the next leaf.
                                 let next_index = (index + 1) as usize;
                                 if next_index < (*branch).len() {
-                                    prefetch((*branch).get_leaf(next_index));
+                                    prefetch((*branch).get_leaf_unchecked(next_index));
                                 }
                                 break;
                             }
@@ -389,24 +390,23 @@ where
             } else {
                 loop {
                     // Pop a branch off the top of the stack and examine it.
-                    if !self.stack.is_empty() {
-                        let (branch, mut index) = self.stack.pop_back();
+                    if let Some((branch, mut index)) = self.stack.pop() {
                         if index > 0 {
                             index -= 1;
                             // If we're not at the end yet, push the branch back on the stack and look at the next child.
-                            self.stack.push_back((branch, index));
+                            self.stack.push((branch, index));
                             if (*branch).has_branches() {
-                                let child = (*branch).get_branch(index as usize);
+                                let child = (*branch).get_branch_unchecked(index as usize);
                                 // If it's a branch, push it on the stack and go through the loop again with this branch.
-                                self.stack.push_back((child, child.len() as isize));
+                                self.stack.push((child, child.len() as isize));
                                 continue;
                             } else {
                                 // If it's a leaf, this is our new leaf, we're done.
-                                self.leaf = (*branch).get_leaf(index as usize);
+                                self.leaf = (*branch).get_leaf_unchecked(index as usize);
                                 self.index = (*self.leaf).keys().len() - 1;
                                 // Prefetch the next leaf.
                                 if index > 0 {
-                                    prefetch((*branch).get_leaf(index as usize - 1));
+                                    prefetch((*branch).get_leaf_unchecked(index as usize - 1));
                                 }
                                 break;
                             }
@@ -431,26 +431,26 @@ where
         // TODO need a strategy for rebalancing after remove
         let index = self.index;
         let leaf = self.deref_mut_leaf().unwrap();
-        let key = leaf.keys.remove(index);
-        let value = leaf.values.remove(index);
+        let (key, value) = leaf.remove_unchecked(index);
         if leaf.is_empty() {
             loop {
-                let (branch, index) = self.stack.pop_back();
-                let branch = &mut *(branch as *mut Branch<K, V, B, L>);
-                let index = index as usize;
-                branch.remove_key(index);
-                if branch.has_leaves() {
-                    branch.remove_leaf(index);
+                if let Some((branch, index)) = self.stack.pop() {
+                    let branch = &mut *(branch as *mut Branch<K, V, B, L>);
+                    let index = index as usize;
+                    if branch.has_leaves() {
+                        branch.remove_leaf(index);
+                    } else {
+                        branch.remove_branch(index);
+                    }
+                    if !branch.is_empty() {
+                        break;
+                    }
                 } else {
-                    branch.remove_branch(index);
-                }
-                if !branch.is_empty() || self.stack.is_empty() {
-                    return (key, value);
+                    break;
                 }
             }
-        } else {
-            (key, value)
         }
+        (key, value)
     }
 
     /// Insert a key at the index being pointed at.
@@ -464,72 +464,86 @@ where
         let index = self.index;
         let leaf = self.deref_mut_leaf().unwrap();
         if !leaf.is_full() {
-            leaf.keys.insert(index, key);
-            leaf.values.insert(index, value);
+            leaf.insert_unchecked(index, key, value);
             Ok(self)
         } else {
             // Walk up the tree to find somewhere to split.
             loop {
-                if self.stack.is_empty() {
-                    return Err((key, value));
-                }
-                let (branch, index) = self.stack.pop_back();
-                let branch = &mut *(branch as *mut Branch<K, V, B, L>);
-                let index = index as usize;
-                if !branch.is_full() {
-                    let choose_index = if branch.has_branches() {
-                        let (left, right) = branch.remove_branch(index).split();
-                        let left_highest = left.highest();
-                        let choose_index = if &key <= left_highest {
-                            index
-                        } else {
-                            index + 1
-                        };
-                        branch.insert_key(index, left_highest.clone());
-                        branch.insert_branch_pair(index, left, right);
-                        choose_index
-                    } else {
-                        let (left, right) = branch.remove_leaf(index).split();
-                        let left_highest = left.highest();
-                        let choose_index = if &key <= left_highest {
-                            index
-                        } else {
-                            index + 1
-                        };
-                        branch.insert_key(index, left_highest.clone());
-                        branch.insert_leaf_pair(index, left, right);
-                        choose_index
-                    };
-                    // We're going to walk down either the left or the right hand branch of our split.
-                    // We're guaranteed to find a leaf, but it might be full if we split a higher branch,
-                    // so we might have to go back up and split further.
-                    let leaf = if branch.has_branches() {
-                        walk_path(branch.get_branch(choose_index), &key, &mut self.stack)
-                    } else {
-                        Some(branch.get_leaf(choose_index))
-                    };
-                    if let Some(leaf) = leaf {
-                        if !leaf.is_full() {
-                            let index = leaf
-                                .keys
-                                .binary_search(&key)
-                                .expect_err("tried to insert() a key that already exists");
-                            self.leaf = leaf;
-                            self.index = index;
-                            assert!(
-                                index <= leaf.keys.len(),
-                                "index {} > len {}",
+                if let Some((branch, index)) = self.stack.pop() {
+                    let branch = &mut *(branch as *mut Branch<K, V, B, L>);
+                    let index = index as usize;
+                    if !branch.is_full() {
+                        let choose_index = if branch.has_branches() {
+                            let (removed_key, removed_branch) = branch.remove_branch(index);
+                            let (left, right) = removed_branch.split();
+                            let left_highest = left.highest();
+                            let choose_index = if &key <= left_highest {
+                                index
+                            } else {
+                                index + 1
+                            };
+                            branch.insert_branch_pair(
                                 index,
-                                leaf.keys.len()
+                                left_highest.clone(),
+                                left,
+                                removed_key,
+                                right,
                             );
-                            let leaf = self.deref_mut_leaf().unwrap();
-                            leaf.keys.insert(index, key);
-                            leaf.values.insert(index, value);
-                            return Ok(self);
+                            choose_index
+                        } else {
+                            let (removed_key, removed_leaf) = branch.remove_leaf(index);
+                            let (left, right) = removed_leaf.split();
+                            let left_highest = left.highest();
+                            let choose_index = if &key <= left_highest {
+                                index
+                            } else {
+                                index + 1
+                            };
+                            branch.insert_leaf_pair(
+                                index,
+                                left_highest.clone(),
+                                left,
+                                removed_key,
+                                right,
+                            );
+                            choose_index
+                        };
+                        // We're going to walk down either the left or the right hand branch of our split.
+                        // We're guaranteed to find a leaf, but it might be full if we split a higher branch,
+                        // so we might have to go back up and split further.
+                        let leaf = if branch.has_branches() {
+                            walk_path(
+                                branch.get_branch_unchecked(choose_index),
+                                &key,
+                                &mut self.stack,
+                            )
+                        } else {
+                            Some(branch.get_leaf_unchecked(choose_index))
+                        };
+                        if let Some(leaf) = leaf {
+                            if !leaf.is_full() {
+                                let index = leaf
+                                    .keys()
+                                    .binary_search(&key)
+                                    .expect_err("tried to insert() a key that already exists");
+                                self.leaf = leaf;
+                                self.index = index;
+                                assert!(
+                                    index <= leaf.len(),
+                                    "index {} > len {}",
+                                    index,
+                                    leaf.len()
+                                );
+                                let leaf = self.deref_mut_leaf_unchecked();
+                                leaf.insert_unchecked(index, key, value);
+                                return Ok(self);
+                            }
+                        } else {
+                            unreachable!("walk_path() failed to produce a leaf, even though the leaf should be there!")
                         }
-                    } else {
-                        unreachable!("walk_path() failed to produce a leaf, even though the leaf should be there!")
                     }
+                } else {
+                    return Err((key, value));
                 }
             }
         }
@@ -551,8 +565,8 @@ where
         loop {
             index = branch.len() - 1;
             debug_assert!(branch.highest() < &key);
-            branch.keys[index] = key.clone();
-            self.stack.push_back((branch, index as isize));
+            branch.keys_mut()[index] = key.clone();
+            self.stack.push((branch, index as isize));
             if branch.has_branches() {
                 branch = branch.get_branch_mut(index);
             } else {
@@ -572,6 +586,15 @@ where
         self.leaf.is_null()
     }
 
+    pub(crate) unsafe fn deref_leaf_unchecked<'a>(&'a self) -> &'a Leaf<K, V, L> {
+        &*self.leaf
+    }
+
+    pub(crate) unsafe fn deref_mut_leaf_unchecked<'a>(&'a mut self) -> &'a mut Leaf<K, V, L> {
+        let ptr = self.leaf as *mut Leaf<K, V, L>;
+        &mut *ptr
+    }
+
     pub(crate) unsafe fn deref_leaf<'a>(&'a self) -> Option<&'a Leaf<K, V, L>> {
         self.leaf.as_ref()
     }
@@ -586,29 +609,36 @@ where
     {
         let index = self.index;
         let leaf = &mut *(self.leaf as *mut Leaf<K, V, L>);
-        let key: *mut K = &mut leaf.keys[index];
-        let value: *mut V = &mut leaf.values[index];
+        let key: *mut K = &mut leaf.keys_mut()[index];
+        let value: *mut V = &mut leaf.values_mut()[index];
         (&mut *key, &mut *value)
     }
 
     pub(crate) unsafe fn key<'a>(&'a self) -> Option<&'a K> {
-        self.deref_leaf().map(|leaf| &leaf.keys[self.index])
+        self.deref_leaf()
+            .map(|leaf| leaf.keys().get_unchecked(self.index))
+    }
+
+    pub(crate) unsafe fn key_unchecked<'a>(&'a self) -> &'a K {
+        self.deref_leaf_unchecked().keys().get_unchecked(self.index)
     }
 
     pub(crate) unsafe fn value<'a>(&'a self) -> Option<&'a V> {
-        self.deref_leaf().map(|leaf| &leaf.values[self.index])
+        self.deref_leaf()
+            .map(|leaf| leaf.values().get_unchecked(self.index))
     }
 
     pub(crate) unsafe fn value_mut<'a>(&'a mut self) -> Option<&'a mut V> {
         let index = self.index;
-        self.deref_mut_leaf().map(|leaf| &mut leaf.values[index])
+        self.deref_mut_leaf()
+            .map(|leaf| leaf.values_mut().get_unchecked_mut(index))
     }
 }
 
 impl<Lifetime, K, V, B, L> Debug for PathedPointer<Lifetime, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "PathedPointer")
@@ -622,7 +652,7 @@ mod test {
 
     #[test]
     fn test_find_key() {
-        let keys: Chunk<usize> = Chunk::from_iter(vec![2, 4, 6, 8]);
+        let keys: Vec<usize> = Vec::from_iter(vec![2, 4, 6, 8]);
         assert_eq!(Some(0), find_key(&keys, &0));
         assert_eq!(Some(0), find_key(&keys, &1));
         assert_eq!(Some(0), find_key(&keys, &2));
@@ -639,7 +669,7 @@ mod test {
 
     #[test]
     fn test_find_key_or_next() {
-        let keys: Chunk<usize> = Chunk::from_iter(vec![2, 4, 6, 8]);
+        let keys: Vec<usize> = Vec::from_iter(vec![2, 4, 6, 8]);
         assert_eq!(0, find_key_or_next(&keys, &0));
         assert_eq!(0, find_key_or_next(&keys, &1));
         assert_eq!(0, find_key_or_next(&keys, &2));
@@ -653,7 +683,7 @@ mod test {
 
     #[test]
     fn test_find_key_or_prev() {
-        let keys: Chunk<usize> = Chunk::from_iter(vec![2, 4, 6, 8]);
+        let keys: Vec<usize> = Vec::from_iter(vec![2, 4, 6, 8]);
         assert_eq!(0, find_key_or_prev(&keys, &2));
         assert_eq!(0, find_key_or_prev(&keys, &3));
         assert_eq!(1, find_key_or_prev(&keys, &4));

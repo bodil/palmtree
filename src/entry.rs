@@ -4,7 +4,7 @@ use crate::{
     search::PathedPointer,
     PalmTree,
 };
-use sized_chunks::types::ChunkLength;
+use generic_array::ArrayLength;
 use std::fmt::{Debug, Error, Formatter};
 use typenum::{IsGreater, U3};
 
@@ -12,8 +12,8 @@ use typenum::{IsGreater, U3};
 pub enum Entry<'a, K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     Vacant(VacantEntry<'a, K, V, B, L>),
     Occupied(OccupiedEntry<'a, K, V, B, L>),
@@ -22,8 +22,8 @@ where
 impl<'a, K, V, B, L> Entry<'a, K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     #[inline(always)]
     pub(crate) fn new(tree: &'a mut PalmTree<K, V, B, L>, key: K) -> Self {
@@ -47,8 +47,8 @@ where
 pub struct VacantEntry<'a, K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     tree: &'a mut PalmTree<K, V, B, L>,
     cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
@@ -59,8 +59,8 @@ impl<'a, K, V, B, L> VacantEntry<'a, K, V, B, L>
 where
     K: 'a + Ord + Clone,
     V: 'a,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     pub fn key(&self) -> &K {
         &self.key
@@ -78,7 +78,13 @@ where
         if self.tree.is_empty() {
             self.tree.root = Some(Branch::unit(Leaf::unit(self.key, value).into()).into());
             self.tree.size = 1;
-            return &mut self.tree.root.as_mut().unwrap().get_leaf_mut(0).values[0];
+            return &mut self
+                .tree
+                .root
+                .as_mut()
+                .unwrap()
+                .get_leaf_mut(0)
+                .values_mut()[0];
         }
         let result = if self.cursor.is_null() {
             unsafe {
@@ -109,8 +115,8 @@ impl<'a, K, V, B, L> Debug for VacantEntry<'a, K, V, B, L>
 where
     K: Ord + Clone + Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "VacantEntry({:?})", self.key())
@@ -122,8 +128,8 @@ where
 pub struct OccupiedEntry<'a, K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     tree: &'a mut PalmTree<K, V, B, L>,
     cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
@@ -133,8 +139,8 @@ impl<'a, K, V, B, L> OccupiedEntry<'a, K, V, B, L>
 where
     K: 'a + Ord + Clone,
     V: 'a,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     pub fn key(&self) -> &K {
         unsafe { self.cursor.key() }.unwrap()
@@ -170,8 +176,8 @@ impl<'a, K, V, B, L> Debug for OccupiedEntry<'a, K, V, B, L>
 where
     K: Ord + Clone + Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "OccupiedEntry({:?} => {:?})", self.key(), self.get())

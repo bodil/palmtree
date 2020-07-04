@@ -1,6 +1,6 @@
 use super::paths_from_range;
 use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use sized_chunks::types::ChunkLength;
+use generic_array::ArrayLength;
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
@@ -11,8 +11,8 @@ use typenum::{IsGreater, U3};
 
 pub struct IterMut<'a, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     left: PathedPointer<&'a mut (K, V), K, V, B, L>,
     right: PathedPointer<&'a mut (K, V), K, V, B, L>,
@@ -21,8 +21,8 @@ where
 impl<'a, K, V, B, L> IterMut<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn null() -> Self {
         Self {
@@ -92,8 +92,8 @@ where
 impl<'a, K, V, B, L> Iterator for IterMut<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Item = (&'a K, &'a mut V);
 
@@ -122,8 +122,8 @@ impl<'a, K, V, B, L> DoubleEndedIterator for IterMut<'a, K, V, B, L>
 where
     K: 'a + Clone + Ord,
     V: 'a,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -149,15 +149,15 @@ where
 impl<'a, K, V, B, L> FusedIterator for IterMut<'a, K, V, B, L>
 where
     K: Clone + Ord,
-    B: 'a + ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
 }
 
 impl<'a, K, V, B, L> Debug for IterMut<'a, K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "IterMut")

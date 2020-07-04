@@ -22,6 +22,7 @@ use std::{
 };
 
 mod arch;
+mod array;
 mod branch;
 mod entry;
 mod iter;
@@ -32,13 +33,19 @@ use branch::{node::Node, Branch};
 use leaf::Leaf;
 
 pub use entry::Entry;
+use generic_array::ArrayLength;
 pub use iter::{Iter, IterMut, MergeIter, OwnedIter};
 use search::PathedPointer;
-use sized_chunks::types::ChunkLength;
 use typenum::{IsGreater, Unsigned, U3, U64};
 
 #[cfg(any(test, feature = "test"))]
 pub mod tests;
+
+enum InsertResult<K, V> {
+    Added,
+    Replaced(V),
+    Full(K, V),
+}
 
 pub trait NodeSize: Unsigned + IsGreater<U3> {}
 
@@ -46,8 +53,8 @@ pub type StdPalmTree<K, V> = PalmTree<K, V, U64, U64>;
 
 pub struct PalmTree<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     size: usize,
     root: Option<Box<Branch<K, V, B, L>>>,
@@ -55,8 +62,8 @@ where
 
 impl<K, V, B, L> Default for PalmTree<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn default() -> Self {
         Self::new()
@@ -65,8 +72,8 @@ where
 
 impl<K, V, B, L> PalmTree<K, V, B, L>
 where
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     pub fn new() -> Self {
         Self {
@@ -79,8 +86,8 @@ where
 impl<K, V, B, L> PalmTree<K, V, B, L>
 where
     K: Clone + Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     /// Construct a B+-tree efficiently from an ordered iterator.
     ///
@@ -96,19 +103,15 @@ where
             child: Box<Branch<K, V, B, L>>,
             stack: &mut Vec<Box<Branch<K, V, B, L>>>,
         ) where
-            B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-            L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+            B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+            L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
         {
-            let mut parent = stack
-                .pop()
-                .unwrap_or_else(|| Branch::new(child.height() + 1).into());
+            let mut parent = stack.pop().unwrap_or_else(|| Branch::new(true).into());
             if parent.is_full() {
-                let height = parent.height();
                 push_stack(parent, stack);
-                parent = Box::new(Branch::new(height));
+                parent = Box::new(Branch::new(true));
             }
-            parent.push_key(child.highest().clone());
-            parent.push_branch(child);
+            parent.push_branch(child.highest().clone(), child);
             stack.push(parent);
         }
 
@@ -118,7 +121,7 @@ where
         let iter = iter.into_iter();
         let mut size = 0;
         let mut stack: Vec<Box<Branch<K, V, B, L>>> = Vec::new();
-        let mut parent: Box<Branch<K, V, B, L>> = Box::new(Branch::new(1));
+        let mut parent: Box<Branch<K, V, B, L>> = Box::new(Branch::new(false));
         let mut leaf: Box<Leaf<K, V, L>> = Box::new(Leaf::new());
 
         // Loop over input, fill leaf, push into parent when full.
@@ -137,18 +140,16 @@ where
                 // If parent is full, push it to the parent above it on the stack.
                 if parent.is_full() {
                     push_stack(parent, &mut stack);
-                    parent = Box::new(Branch::new(1));
+                    parent = Box::new(Branch::new(false));
                 }
 
-                parent.push_key(leaf.keys.last().unwrap().clone());
-                parent.push_leaf(leaf);
+                parent.push_leaf(leaf.highest().clone(), leaf);
 
                 leaf = Box::new(Leaf::new());
             }
 
             // Push the input into the leaf.
-            leaf.keys.push_back(key);
-            leaf.values.push_back(value);
+            unsafe { leaf.push_unchecked(key, value) };
             size += 1;
         }
 
@@ -163,10 +164,9 @@ where
         // At end of input, push last leaf into parent, as above.
         if parent.is_full() {
             push_stack(parent, &mut stack);
-            parent = Box::new(Branch::new(1));
+            parent = Box::new(Branch::new(false));
         }
-        parent.push_key(leaf.keys.last().unwrap().clone());
-        parent.push_leaf(leaf);
+        parent.push_leaf(leaf.highest().clone(), leaf);
 
         // Push parent into the parent above it.
         push_stack(parent, &mut stack);
@@ -243,15 +243,6 @@ where
 
     pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V, B, L> {
         Entry::new(self, key)
-    }
-
-    fn split_root(root: &mut Box<Branch<K, V, B, L>>) {
-        let old_root = std::mem::replace(root, Branch::new(root.height() + 1).into());
-        let (left, right) = old_root.split();
-        root.push_key(left.highest().clone());
-        root.push_key(right.highest().clone());
-        root.push_branch(left);
-        root.push_branch(right);
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -361,8 +352,53 @@ where
         if let Some(ref mut root) = self.root {
             // If a branch bearing root only has one child, we can replace the root with that child.
             while root.has_branches() && root.len() == 1 {
-                *root = root.remove_last_branch();
+                *root = root.remove_last_branch().1;
             }
+        }
+    }
+
+    fn split_root(root: &mut Box<Branch<K, V, B, L>>) {
+        let old_root = std::mem::replace(root, Branch::new(true).into());
+        let (left, right) = old_root.split();
+        root.push_branch_pair(left.highest().clone(), left, right.highest().clone(), right);
+    }
+
+    pub fn insert_recursive(&mut self, key: K, value: V) -> Option<V> {
+        let len = self.size;
+        if let Some(ref mut root) = self.root {
+            // Special case: if a tree has size 0 but there is a root, it's because
+            // we removed the last entry and the root has been left allocated.
+            // Tree walking algos assume the tree has no empty nodes, so we have to
+            // handle this as a special case.
+            if len == 0 {
+                // Make sure the delete trimmed the tree properly.
+                debug_assert_eq!(0, root.len());
+                debug_assert!(root.has_leaves());
+
+                root.push_leaf(key.clone(), Box::new(Leaf::unit(key, value)));
+                self.size = 1;
+                None
+            } else {
+                match root.insert(key, value) {
+                    InsertResult::Added => {
+                        self.size += 1;
+                        None
+                    }
+                    InsertResult::Replaced(value) => Some(value),
+                    InsertResult::Full(key, value) => {
+                        // If the root is full, we need to increase the height of the tree and retry insertion,
+                        // so we can split the old root.
+                        let key2 = root.highest().clone();
+                        let child = std::mem::replace(&mut *root, Box::new(Branch::new(true)));
+                        root.push_branch(key2, child);
+                        self.insert(key, value)
+                    }
+                }
+            }
+        } else {
+            self.root = Some(Box::new(Branch::unit(Box::new(Leaf::unit(key, value)))));
+            self.size = 1;
+            None
         }
     }
 }
@@ -372,8 +408,8 @@ impl<K, V, B, L> Debug for PalmTree<K, V, B, L>
 where
     K: Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match &self.root {
@@ -388,8 +424,8 @@ impl<K, V, B, L> Debug for PalmTree<K, V, B, L>
 where
     K: Clone + Ord + Debug,
     V: Debug,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.iter()).finish()
@@ -400,8 +436,8 @@ impl<K, V, B, L> Clone for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
     V: Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -414,8 +450,8 @@ where
 impl<K, V, B, L> FromIterator<(K, V)> for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -432,8 +468,8 @@ where
 impl<'a, K, V, B, L> Index<&'a K> for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Output = V;
 
@@ -445,8 +481,8 @@ where
 impl<'a, K, V, B, L> IndexMut<&'a K> for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn index_mut(&mut self, index: &K) -> &mut Self::Output {
         self.get_mut(index).expect("no entry found for key")
@@ -457,8 +493,8 @@ impl<K, V, B, L> PartialEq for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
     V: PartialEq,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn eq(&self, other: &Self) -> bool {
         self.len() == other.len() && self.iter().eq(other.iter())
@@ -469,8 +505,8 @@ impl<K, V, B, L> Eq for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
     V: Eq,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
 }
 
@@ -478,8 +514,8 @@ impl<K, V, B, L> PartialOrd for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
     V: PartialOrd,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.iter().partial_cmp(other.iter())
@@ -490,8 +526,8 @@ impl<K, V, B, L> Ord for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
     V: Ord,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
@@ -501,8 +537,8 @@ where
 impl<K, V, B, L> Extend<(K, V)> for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         for (k, v) in iter {
@@ -515,8 +551,8 @@ impl<'a, K, V, B, L> Extend<(&'a K, &'a V)> for PalmTree<K, V, B, L>
 where
     K: 'a + Ord + Copy,
     V: 'a + Copy,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: I) {
         for (k, v) in iter {
@@ -528,8 +564,8 @@ where
 impl<K, V, B, L> Add for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Output = Self;
 
@@ -541,8 +577,8 @@ where
 impl<K, V, B, L> AddAssign for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn add_assign(&mut self, other: Self) {
         self.append_right(other)
@@ -553,10 +589,10 @@ impl<'a, K, V, B, L, B2, L2> Add<&'a PalmTree<K, V, B2, L2>> for PalmTree<K, V, 
 where
     K: Ord + Copy,
     V: Copy,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
-    B2: ChunkLength<K> + ChunkLength<Node<K, V, B2, L2>> + IsGreater<U3>,
-    L2: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    B2: ArrayLength<K> + ArrayLength<Node<K, V, B2, L2>> + IsGreater<U3>,
+    L2: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Output = Self;
 
@@ -572,10 +608,10 @@ impl<'a, K, V, B, L, B2, L2> AddAssign<&'a PalmTree<K, V, B2, L2>> for PalmTree<
 where
     K: Ord + Copy,
     V: Copy,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
-    B2: ChunkLength<K> + ChunkLength<Node<K, V, B2, L2>> + IsGreater<U3>,
-    L2: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    B2: ArrayLength<K> + ArrayLength<Node<K, V, B2, L2>> + IsGreater<U3>,
+    L2: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn add_assign(&mut self, other: &'a PalmTree<K, V, B2, L2>) {
         let root = self.root.take();
@@ -594,8 +630,8 @@ impl<K, V, B, L> Hash for PalmTree<K, V, B, L>
 where
     K: Ord + Clone + Hash,
     V: Hash,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn hash<H>(&self, state: &mut H)
     where
@@ -610,8 +646,8 @@ where
 impl<'a, K, V, B, L> IntoIterator for &'a PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V, B, L>;
@@ -623,8 +659,8 @@ where
 impl<'a, K, V, B, L> IntoIterator for &'a mut PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Item = (&'a K, &'a mut V);
     type IntoIter = IterMut<'a, K, V, B, L>;
@@ -636,8 +672,8 @@ where
 impl<K, V, B, L> IntoIterator for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     type Item = (K, V);
     type IntoIter = OwnedIter<K, V, B, L>;
@@ -649,8 +685,8 @@ where
 impl<K, V, B, L> From<BTreeMap<K, V>> for PalmTree<K, V, B, L>
 where
     K: Ord + Clone,
-    B: ChunkLength<K> + ChunkLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ChunkLength<K> + ChunkLength<V> + IsGreater<U3>,
+    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
+    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
 {
     fn from(map: BTreeMap<K, V>) -> Self {
         Self::load(map.into_iter())

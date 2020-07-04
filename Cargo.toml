@@ -15,10 +15,11 @@ test = ["arbitrary"]
 tree_debug = []
 
 [dependencies]
-sized-chunks = "0.6.2"
 refpool = "0.4.2"
 typenum = "1.12"
 arbitrary = { version = "0.4", optional = true, features = ["derive"] }
+arrayvec = "0.5.1"
+generic-array = "0.14.2"
 
 [dev-dependencies]
 criterion = "0.3"
