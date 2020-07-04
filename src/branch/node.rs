@@ -1,18 +1,22 @@
-use crate::{branch::Branch, leaf::Leaf};
-use generic_array::ArrayLength;
+use crate::{branch::Branch, config::TreeConfig, leaf::Leaf};
 use std::{
     fmt::{Debug, Error, Formatter},
     marker::PhantomData,
     ptr::NonNull,
 };
-use typenum::{IsGreater, U3};
 
-pub struct Node<K, V, B, L> {
-    types: PhantomData<(K, V, B, L)>,
+pub struct Node<K, V, C>
+where
+    C: ?Sized,
+{
+    types: PhantomData<(K, V, C)>,
     node: NonNull<()>,
 }
 
-impl<K, V, B, L> Drop for Node<K, V, B, L> {
+impl<K, V, C> Drop for Node<K, V, C>
+where
+    C: ?Sized,
+{
     fn drop(&mut self) {
         // Nodes should never be dropped directly.
         // Branch has to make sure they're dropped correctly,
@@ -21,14 +25,13 @@ impl<K, V, B, L> Drop for Node<K, V, B, L> {
     }
 }
 
-impl<K, V, B, L> From<Box<Leaf<K, V, L>>> for Node<K, V, B, L>
+impl<K, V, C> From<Box<Leaf<K, V, C>>> for Node<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     #[inline(always)]
-    fn from(node: Box<Leaf<K, V, L>>) -> Self {
-        let ptr: NonNull<Leaf<K, V, L>> = Box::leak(node).into();
+    fn from(node: Box<Leaf<K, V, C>>) -> Self {
+        let ptr: NonNull<Leaf<K, V, C>> = Box::leak(node).into();
         Self {
             types: PhantomData,
             node: ptr.cast(),
@@ -36,14 +39,13 @@ where
     }
 }
 
-impl<K, V, B, L> From<Box<Branch<K, V, B, L>>> for Node<K, V, B, L>
+impl<K, V, C> From<Box<Branch<K, V, C>>> for Node<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     #[inline(always)]
-    fn from(node: Box<Branch<K, V, B, L>>) -> Self {
-        let ptr: NonNull<Branch<K, V, B, L>> = Box::leak(node).into();
+    fn from(node: Box<Branch<K, V, C>>) -> Self {
+        let ptr: NonNull<Branch<K, V, C>> = Box::leak(node).into();
         Self {
             types: PhantomData,
             node: ptr.cast(),
@@ -51,21 +53,19 @@ where
     }
 }
 
-impl<K, V, B, L> Node<K, V, B, L> {
-    pub(crate) unsafe fn unwrap_branch(self) -> Box<Branch<K, V, B, L>>
+impl<K, V, C> Node<K, V, C> {
+    pub(crate) unsafe fn unwrap_branch(self) -> Box<Branch<K, V, C>>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
         let out = Box::from_raw(self.node.as_ptr().cast());
         std::mem::forget(self);
         out
     }
 
-    pub(crate) unsafe fn unwrap_leaf(self) -> Box<Leaf<K, V, L>>
+    pub(crate) unsafe fn unwrap_leaf(self) -> Box<Leaf<K, V, C>>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
         let out = Box::from_raw(self.node.as_ptr().cast());
         std::mem::forget(self);
@@ -73,50 +73,45 @@ impl<K, V, B, L> Node<K, V, B, L> {
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V, B, L>
+    pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V, C>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
-        let ptr: *const Branch<K, V, B, L> = self.node.cast().as_ptr();
+        let ptr: *const Branch<K, V, C> = self.node.cast().as_ptr();
         &*ptr
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V, L>
+    pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V, C>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
-        let ptr: *const Leaf<K, V, L> = self.node.cast().as_ptr();
+        let ptr: *const Leaf<K, V, C> = self.node.cast().as_ptr();
         &*ptr
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_branch_mut(&mut self) -> &mut Branch<K, V, B, L>
+    pub(crate) unsafe fn as_branch_mut(&mut self) -> &mut Branch<K, V, C>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
-        let ptr: *mut Branch<K, V, B, L> = self.node.cast().as_ptr();
+        let ptr: *mut Branch<K, V, C> = self.node.cast().as_ptr();
         &mut *ptr
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_leaf_mut(&mut self) -> &mut Leaf<K, V, L>
+    pub(crate) unsafe fn as_leaf_mut(&mut self) -> &mut Leaf<K, V, C>
     where
-        B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-        L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+        C: TreeConfig<K, V>,
     {
-        let ptr: *mut Leaf<K, V, L> = self.node.cast().as_ptr();
+        let ptr: *mut Leaf<K, V, C> = self.node.cast().as_ptr();
         &mut *ptr
     }
 }
 
-impl<K, V, B, L> Debug for Node<K, V, B, L>
+impl<K, V, C> Debug for Node<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "Node[...]")

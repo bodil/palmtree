@@ -1,21 +1,20 @@
-use crate::{array::Array, InsertResult};
-use generic_array::ArrayLength;
+use crate::{array::Array, config::TreeConfig, InsertResult};
 use std::fmt::{Debug, Error, Formatter};
-use typenum::{IsGreater, U3};
+use typenum::Unsigned;
 
 /// A leaf node contains an ordered sequence of direct mappings from keys to values.
-pub(crate) struct Leaf<K, V, L>
+pub(crate) struct Leaf<K, V, C>
 where
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     length: usize,
-    keys: Array<K, L>,
-    values: Array<V, L>,
+    keys: Array<K, C::LeafSize>,
+    values: Array<V, C::LeafSize>,
 }
 
-impl<K, V, L> Drop for Leaf<K, V, L>
+impl<K, V, C> Drop for Leaf<K, V, C>
 where
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn drop(&mut self) {
         unsafe {
@@ -25,11 +24,11 @@ where
     }
 }
 
-impl<K, V, L> Clone for Leaf<K, V, L>
+impl<K, V, C> Clone for Leaf<K, V, C>
 where
     K: Clone,
     V: Clone,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -40,9 +39,9 @@ where
     }
 }
 
-impl<K, V, L> Leaf<K, V, L>
+impl<K, V, C> Leaf<K, V, C>
 where
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub(crate) fn new() -> Self {
         Leaf {
@@ -69,7 +68,7 @@ where
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        self.len() == L::USIZE
+        self.len() == C::LeafSize::USIZE
     }
 
     pub(crate) fn highest(&self) -> &K {
@@ -92,7 +91,7 @@ where
         unsafe { self.values.deref_mut(self.length) }
     }
 
-    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V, L>>, Box<Leaf<K, V, L>>) {
+    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V, C>>, Box<Leaf<K, V, C>>) {
         let half = self.length / 2;
         let right = Box::new(Leaf {
             length: half,
@@ -153,10 +152,10 @@ where
     }
 }
 
-impl<K, V, L> Leaf<K, V, L>
+impl<K, V, C> Leaf<K, V, C>
 where
     K: Clone + Ord,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub(crate) fn get(&self, key: &K) -> Option<&V> {
         self.keys()
@@ -200,11 +199,11 @@ where
     }
 }
 
-impl<K, V, L> Debug for Leaf<K, V, L>
+impl<K, V, C> Debug for Leaf<K, V, C>
 where
     K: Debug,
     V: Debug,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         let pairs: Vec<_> = self.keys().iter().zip(self.values().iter()).collect();

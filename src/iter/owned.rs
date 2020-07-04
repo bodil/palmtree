@@ -1,32 +1,25 @@
-use crate::{
-    branch::{node::Node, Branch},
-    search::PathedPointer,
-};
-use generic_array::ArrayLength;
+use crate::{branch::Branch, config::TreeConfig, search::PathedPointer};
 use std::{
     fmt::{Debug, Formatter},
     iter::FusedIterator,
 };
-use typenum::{IsGreater, U3};
 
-pub struct OwnedIter<K, V, B, L>
+pub struct OwnedIter<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    tree: Option<Box<Branch<K, V, B, L>>>,
-    left: PathedPointer<(K, V), K, V, B, L>,
-    right: PathedPointer<(K, V), K, V, B, L>,
+    tree: Option<Box<Branch<K, V, C>>>,
+    left: PathedPointer<(K, V), K, V, C>,
+    right: PathedPointer<(K, V), K, V, C>,
     remaining: usize,
 }
 
-impl<K, V, B, L> OwnedIter<K, V, B, L>
+impl<K, V, C> OwnedIter<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    pub(crate) fn new(tree: Option<Box<Branch<K, V, B, L>>>, remaining: usize) -> Self {
+    pub(crate) fn new(tree: Option<Box<Branch<K, V, C>>>, remaining: usize) -> Self {
         if let Some(ref root) = tree {
             Self {
                 left: PathedPointer::lowest(&root),
@@ -45,11 +38,10 @@ where
     }
 }
 
-impl<K, V, B, L> Iterator for OwnedIter<K, V, B, L>
+impl<K, V, C> Iterator for OwnedIter<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Item = (K, V);
 
@@ -77,11 +69,10 @@ where
     }
 }
 
-impl<K, V, B, L> DoubleEndedIterator for OwnedIter<K, V, B, L>
+impl<K, V, C> DoubleEndedIterator for OwnedIter<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tree.is_none() {
@@ -102,27 +93,24 @@ where
     }
 }
 
-impl<K, V, B, L> ExactSizeIterator for OwnedIter<K, V, B, L>
+impl<K, V, C> ExactSizeIterator for OwnedIter<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
 }
-impl<K, V, B, L> FusedIterator for OwnedIter<K, V, B, L>
+impl<K, V, C> FusedIterator for OwnedIter<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
 }
 
-impl<K, V, B, L> Debug for OwnedIter<K, V, B, L>
+impl<K, V, C> Debug for OwnedIter<K, V, C>
 where
     K: Ord + Clone + Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "OwnedIter")

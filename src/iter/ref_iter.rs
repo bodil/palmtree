@@ -1,28 +1,24 @@
 use super::paths_from_range;
-use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use generic_array::ArrayLength;
+use crate::{config::TreeConfig, search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
     fmt::{Debug, Error, Formatter},
     iter::FusedIterator,
     ops::RangeBounds,
 };
-use typenum::{IsGreater, U3};
 
-pub struct Iter<'a, K, V, B, L>
+pub struct Iter<'a, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    left: PathedPointer<&'a (K, V), K, V, B, L>,
-    right: PathedPointer<&'a (K, V), K, V, B, L>,
+    left: PathedPointer<&'a (K, V), K, V, C>,
+    right: PathedPointer<&'a (K, V), K, V, C>,
 }
 
-impl<'a, K, V, B, L> Clone for Iter<'a, K, V, B, L>
+impl<'a, K, V, C> Clone for Iter<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -32,11 +28,10 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Iter<'a, K, V, B, L>
+impl<'a, K, V, C> Iter<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     fn null() -> Self {
         Self {
@@ -45,7 +40,7 @@ where
         }
     }
 
-    pub(crate) fn new<R>(tree: &'a PalmTree<K, V, B, L>, range: R) -> Self
+    pub(crate) fn new<R>(tree: &'a PalmTree<K, V, C>, range: R) -> Self
     where
         R: RangeBounds<K>,
     {
@@ -66,12 +61,12 @@ where
         debug_assert!(result);
     }
 
-    fn left(&self) -> &'a PathedPointer<&'a (), K, V, B, L> {
-        unsafe { &*(&self.left as *const _ as *const PathedPointer<&'a (), K, V, B, L>) }
+    fn left(&self) -> &'a PathedPointer<&'a (), K, V, C> {
+        unsafe { &*(&self.left as *const _ as *const PathedPointer<&'a (), K, V, C>) }
     }
 
-    fn right(&self) -> &'a PathedPointer<&'a (), K, V, B, L> {
-        unsafe { &*(&self.right as *const _ as *const PathedPointer<&'a (), K, V, B, L>) }
+    fn right(&self) -> &'a PathedPointer<&'a (), K, V, C> {
+        unsafe { &*(&self.right as *const _ as *const PathedPointer<&'a (), K, V, C>) }
     }
 
     fn left_key(&self) -> Option<&'a K> {
@@ -91,11 +86,10 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Iterator for Iter<'a, K, V, B, L>
+impl<'a, K, V, C> Iterator for Iter<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -119,11 +113,10 @@ where
     }
 }
 
-impl<'a, K, V, B, L> DoubleEndedIterator for Iter<'a, K, V, B, L>
+impl<'a, K, V, C> DoubleEndedIterator for Iter<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -146,20 +139,18 @@ where
     }
 }
 
-impl<'a, K, V, B, L> FusedIterator for Iter<'a, K, V, B, L>
+impl<'a, K, V, C> FusedIterator for Iter<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
 }
 
-impl<'a, K, V, B, L> Debug for Iter<'a, K, V, B, L>
+impl<'a, K, V, C> Debug for Iter<'a, K, V, C>
 where
     K: Clone + Ord + Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.clone()).finish()

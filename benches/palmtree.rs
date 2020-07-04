@@ -1,14 +1,11 @@
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
-use palmtree::PalmTree as RawPalmTree;
+use palmtree::StdPalmTree as PalmTree;
 use rand::prelude::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
-use typenum::U64;
-
-type PalmTree<K, V> = RawPalmTree<K, V, U64, U64>;
 
 const SIZES: &[usize] = &[64, 256, 1024, 4096, 16384, 32768, 65536];
 // const SIZES: &[usize] = &[256, 65536];

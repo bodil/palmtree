@@ -2,16 +2,14 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::iter::FromIterator;
 
-use crate::{branch::node::Node, PalmTree};
+use crate::{config::TreeConfig, PalmTree};
 
 #[cfg(not(test))]
 use arbitrary::Arbitrary;
-use generic_array::ArrayLength;
 #[cfg(test)]
 use proptest::proptest;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
-use typenum::{IsGreater, U3};
 
 #[derive(Arbitrary, Debug)]
 pub enum Construct<K, V>
@@ -35,14 +33,13 @@ pub enum Action<K, V> {
 
 pub type Input<K, V> = (Construct<K, V>, Vec<Action<K, V>>);
 
-pub fn integration_test<B, L>(input: Input<u8, u8>)
+pub fn integration_test<C>(input: Input<u8, u8>)
 where
-    B: ArrayLength<u8> + ArrayLength<Node<u8, u8, B, L>> + IsGreater<U3>,
-    L: ArrayLength<u8> + ArrayLength<u8> + IsGreater<U3>,
+    C: TreeConfig<u8, u8>,
 {
     let (constructor, actions) = input;
 
-    let mut set: PalmTree<u8, u8, B, L>;
+    let mut set: PalmTree<u8, u8, C>;
     let mut nat;
 
     match constructor {
@@ -171,7 +168,7 @@ where
 proptest! {
     #[test]
     fn integration_proptest(input: Input<u8,u8>) {
-        use typenum::U64;
-        integration_test::<U64,U64>(input);
+        use crate::config::Tree64;
+        integration_test::<Tree64>(input);
     }
 }

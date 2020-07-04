@@ -24,19 +24,19 @@ use std::{
 mod arch;
 mod array;
 mod branch;
+pub mod config;
 mod entry;
 mod iter;
 mod leaf;
 mod search;
 
-use branch::{node::Node, Branch};
+use branch::Branch;
 use leaf::Leaf;
 
+use config::{Tree64, TreeConfig};
 pub use entry::Entry;
-use generic_array::ArrayLength;
 pub use iter::{Iter, IterMut, MergeIter, OwnedIter};
 use search::PathedPointer;
-use typenum::{IsGreater, Unsigned, U3, U64};
 
 #[cfg(any(test, feature = "test"))]
 pub mod tests;
@@ -47,33 +47,28 @@ enum InsertResult<K, V> {
     Full(K, V),
 }
 
-pub trait NodeSize: Unsigned + IsGreater<U3> {}
+pub type StdPalmTree<K, V> = PalmTree<K, V, Tree64>;
 
-pub type StdPalmTree<K, V> = PalmTree<K, V, U64, U64>;
-
-pub struct PalmTree<K, V, B, L>
+pub struct PalmTree<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     size: usize,
-    root: Option<Box<Branch<K, V, B, L>>>,
+    root: Option<Box<Branch<K, V, C>>>,
 }
 
-impl<K, V, B, L> Default for PalmTree<K, V, B, L>
+impl<K, V, C> Default for PalmTree<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V, B, L> PalmTree<K, V, B, L>
+impl<K, V, C> PalmTree<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub fn new() -> Self {
         Self {
@@ -83,11 +78,10 @@ where
     }
 }
 
-impl<K, V, B, L> PalmTree<K, V, B, L>
+impl<K, V, C> PalmTree<K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     /// Construct a B+-tree efficiently from an ordered iterator.
     ///
@@ -99,12 +93,11 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
     {
-        fn push_stack<K: Clone, V, B, L>(
-            child: Box<Branch<K, V, B, L>>,
-            stack: &mut Vec<Box<Branch<K, V, B, L>>>,
+        fn push_stack<K: Clone, V, C>(
+            child: Box<Branch<K, V, C>>,
+            stack: &mut Vec<Box<Branch<K, V, C>>>,
         ) where
-            B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-            L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+            C: TreeConfig<K, V>,
         {
             let mut parent = stack.pop().unwrap_or_else(|| Branch::new(true).into());
             if parent.is_full() {
@@ -120,9 +113,9 @@ where
 
         let iter = iter.into_iter();
         let mut size = 0;
-        let mut stack: Vec<Box<Branch<K, V, B, L>>> = Vec::new();
-        let mut parent: Box<Branch<K, V, B, L>> = Box::new(Branch::new(false));
-        let mut leaf: Box<Leaf<K, V, L>> = Box::new(Leaf::new());
+        let mut stack: Vec<Box<Branch<K, V, C>>> = Vec::new();
+        let mut parent: Box<Branch<K, V, C>> = Box::new(Branch::new(false));
+        let mut leaf: Box<Leaf<K, V, C>> = Box::new(Leaf::new());
 
         // Loop over input, fill leaf, push into parent when full.
         for (key, value) in iter {
@@ -219,29 +212,29 @@ where
         self.len() == 0
     }
 
-    pub fn iter(&self) -> Iter<'_, K, V, B, L> {
+    pub fn iter(&self) -> Iter<'_, K, V, C> {
         Iter::new(self, ..)
     }
 
-    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, B, L> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, C> {
         IterMut::new(self, ..)
     }
 
-    pub fn range<R>(&self, range: R) -> Iter<'_, K, V, B, L>
+    pub fn range<R>(&self, range: R) -> Iter<'_, K, V, C>
     where
         R: RangeBounds<K>,
     {
         Iter::new(self, range)
     }
 
-    pub fn range_mut<R>(&mut self, range: R) -> IterMut<'_, K, V, B, L>
+    pub fn range_mut<R>(&mut self, range: R) -> IterMut<'_, K, V, C>
     where
         R: RangeBounds<K>,
     {
         IterMut::new(self, range)
     }
 
-    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V, B, L> {
+    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V, C> {
         Entry::new(self, key)
     }
 
@@ -256,8 +249,7 @@ where
     }
 
     pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
-        if let Ok(path) =
-            PathedPointer::<&mut (K, V), _, _, _, _>::exact_key(self.root.as_mut()?, key)
+        if let Ok(path) = PathedPointer::<&mut (K, V), _, _, _>::exact_key(self.root.as_mut()?, key)
         {
             self.size -= 1;
             Some(unsafe { path.remove() })
@@ -270,7 +262,7 @@ where
         if self.is_empty() {
             None
         } else {
-            let path = PathedPointer::<&mut (K, V), _, _, _, _>::lowest(self.root.as_mut()?);
+            let path = PathedPointer::<&mut (K, V), _, _, _>::lowest(self.root.as_mut()?);
             self.size -= 1;
             Some(unsafe { path.remove() })
         }
@@ -280,7 +272,7 @@ where
         if self.is_empty() {
             None
         } else {
-            let path = PathedPointer::<&mut (K, V), _, _, _, _>::highest(self.root.as_mut()?);
+            let path = PathedPointer::<&mut (K, V), _, _, _>::highest(self.root.as_mut()?);
             self.size -= 1;
             Some(unsafe { path.remove() })
         }
@@ -357,7 +349,7 @@ where
         }
     }
 
-    fn split_root(root: &mut Box<Branch<K, V, B, L>>) {
+    fn split_root(root: &mut Box<Branch<K, V, C>>) {
         let old_root = std::mem::replace(root, Branch::new(true).into());
         let (left, right) = old_root.split();
         root.push_branch_pair(left.highest().clone(), left, right.highest().clone(), right);
@@ -404,12 +396,11 @@ where
 }
 
 #[cfg(feature = "tree_debug")]
-impl<K, V, B, L> Debug for PalmTree<K, V, B, L>
+impl<K, V, C> Debug for PalmTree<K, V, C>
 where
     K: Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match &self.root {
@@ -420,24 +411,22 @@ where
 }
 
 #[cfg(not(feature = "tree_debug"))]
-impl<K, V, B, L> Debug for PalmTree<K, V, B, L>
+impl<K, V, C> Debug for PalmTree<K, V, C>
 where
     K: Clone + Ord + Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl<K, V, B, L> Clone for PalmTree<K, V, B, L>
+impl<K, V, C> Clone for PalmTree<K, V, C>
 where
     K: Ord + Clone,
     V: Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -447,11 +436,10 @@ where
     }
 }
 
-impl<K, V, B, L> FromIterator<(K, V)> for PalmTree<K, V, B, L>
+impl<K, V, C> FromIterator<(K, V)> for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -465,11 +453,10 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Index<&'a K> for PalmTree<K, V, B, L>
+impl<'a, K, V, C> Index<&'a K> for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Output = V;
 
@@ -478,67 +465,61 @@ where
     }
 }
 
-impl<'a, K, V, B, L> IndexMut<&'a K> for PalmTree<K, V, B, L>
+impl<'a, K, V, C> IndexMut<&'a K> for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn index_mut(&mut self, index: &K) -> &mut Self::Output {
         self.get_mut(index).expect("no entry found for key")
     }
 }
 
-impl<K, V, B, L> PartialEq for PalmTree<K, V, B, L>
+impl<K, V, C> PartialEq for PalmTree<K, V, C>
 where
     K: Ord + Clone,
     V: PartialEq,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn eq(&self, other: &Self) -> bool {
         self.len() == other.len() && self.iter().eq(other.iter())
     }
 }
 
-impl<K, V, B, L> Eq for PalmTree<K, V, B, L>
+impl<K, V, C> Eq for PalmTree<K, V, C>
 where
     K: Ord + Clone,
     V: Eq,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
 }
 
-impl<K, V, B, L> PartialOrd for PalmTree<K, V, B, L>
+impl<K, V, C> PartialOrd for PalmTree<K, V, C>
 where
     K: Ord + Clone,
     V: PartialOrd,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.iter().partial_cmp(other.iter())
     }
 }
 
-impl<K, V, B, L> Ord for PalmTree<K, V, B, L>
+impl<K, V, C> Ord for PalmTree<K, V, C>
 where
     K: Ord + Clone,
     V: Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl<K, V, B, L> Extend<(K, V)> for PalmTree<K, V, B, L>
+impl<K, V, C> Extend<(K, V)> for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         for (k, v) in iter {
@@ -547,12 +528,11 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Extend<(&'a K, &'a V)> for PalmTree<K, V, B, L>
+impl<'a, K, V, C> Extend<(&'a K, &'a V)> for PalmTree<K, V, C>
 where
     K: 'a + Ord + Copy,
     V: 'a + Copy,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: I) {
         for (k, v) in iter {
@@ -561,11 +541,10 @@ where
     }
 }
 
-impl<K, V, B, L> Add for PalmTree<K, V, B, L>
+impl<K, V, C> Add for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Output = Self;
 
@@ -574,29 +553,26 @@ where
     }
 }
 
-impl<K, V, B, L> AddAssign for PalmTree<K, V, B, L>
+impl<K, V, C> AddAssign for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn add_assign(&mut self, other: Self) {
         self.append_right(other)
     }
 }
 
-impl<'a, K, V, B, L, B2, L2> Add<&'a PalmTree<K, V, B2, L2>> for PalmTree<K, V, B, L>
+impl<'a, K, V, C, C2> Add<&'a PalmTree<K, V, C2>> for PalmTree<K, V, C>
 where
     K: Ord + Copy,
     V: Copy,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
-    B2: ArrayLength<K> + ArrayLength<Node<K, V, B2, L2>> + IsGreater<U3>,
-    L2: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
+    C2: TreeConfig<K, V>,
 {
     type Output = Self;
 
-    fn add(self, other: &PalmTree<K, V, B2, L2>) -> Self::Output {
+    fn add(self, other: &PalmTree<K, V, C2>) -> Self::Output {
         Self::load(Self::merge_right_from(
             self.into_iter(),
             other.iter().map(|(k, v)| (k.clone(), v.clone())),
@@ -604,16 +580,14 @@ where
     }
 }
 
-impl<'a, K, V, B, L, B2, L2> AddAssign<&'a PalmTree<K, V, B2, L2>> for PalmTree<K, V, B, L>
+impl<'a, K, V, C, C2> AddAssign<&'a PalmTree<K, V, C2>> for PalmTree<K, V, C>
 where
     K: Ord + Copy,
     V: Copy,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
-    B2: ArrayLength<K> + ArrayLength<Node<K, V, B2, L2>> + IsGreater<U3>,
-    L2: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
+    C2: TreeConfig<K, V>,
 {
-    fn add_assign(&mut self, other: &'a PalmTree<K, V, B2, L2>) {
+    fn add_assign(&mut self, other: &'a PalmTree<K, V, C2>) {
         let root = self.root.take();
         if root.is_none() {
             *self = Self::load(other.iter().map(|(k, v)| (*k, *v)));
@@ -626,12 +600,11 @@ where
     }
 }
 
-impl<K, V, B, L> Hash for PalmTree<K, V, B, L>
+impl<K, V, C> Hash for PalmTree<K, V, C>
 where
     K: Ord + Clone + Hash,
     V: Hash,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn hash<H>(&self, state: &mut H)
     where
@@ -643,50 +616,46 @@ where
     }
 }
 
-impl<'a, K, V, B, L> IntoIterator for &'a PalmTree<K, V, B, L>
+impl<'a, K, V, C> IntoIterator for &'a PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V, B, L>;
+    type IntoIter = Iter<'a, K, V, C>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<'a, K, V, B, L> IntoIterator for &'a mut PalmTree<K, V, B, L>
+impl<'a, K, V, C> IntoIterator for &'a mut PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Item = (&'a K, &'a mut V);
-    type IntoIter = IterMut<'a, K, V, B, L>;
+    type IntoIter = IterMut<'a, K, V, C>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter_mut()
     }
 }
 
-impl<K, V, B, L> IntoIterator for PalmTree<K, V, B, L>
+impl<K, V, C> IntoIterator for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     type Item = (K, V);
-    type IntoIter = OwnedIter<K, V, B, L>;
+    type IntoIter = OwnedIter<K, V, C>;
     fn into_iter(self) -> Self::IntoIter {
         OwnedIter::new(self.root, self.size)
     }
 }
 
-impl<K, V, B, L> From<BTreeMap<K, V>> for PalmTree<K, V, B, L>
+impl<K, V, C> From<BTreeMap<K, V>> for PalmTree<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn from(map: BTreeMap<K, V>) -> Self {
         Self::load(map.into_iter())

@@ -1,32 +1,23 @@
-use crate::{
-    branch::{node::Node, Branch},
-    leaf::Leaf,
-    search::PathedPointer,
-    PalmTree,
-};
-use generic_array::ArrayLength;
+use crate::{branch::Branch, config::TreeConfig, leaf::Leaf, search::PathedPointer, PalmTree};
 use std::fmt::{Debug, Error, Formatter};
-use typenum::{IsGreater, U3};
 
 #[derive(Debug)]
-pub enum Entry<'a, K, V, B, L>
+pub enum Entry<'a, K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    Vacant(VacantEntry<'a, K, V, B, L>),
-    Occupied(OccupiedEntry<'a, K, V, B, L>),
+    Vacant(VacantEntry<'a, K, V, C>),
+    Occupied(OccupiedEntry<'a, K, V, C>),
 }
 
-impl<'a, K, V, B, L> Entry<'a, K, V, B, L>
+impl<'a, K, V, C> Entry<'a, K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     #[inline(always)]
-    pub(crate) fn new(tree: &'a mut PalmTree<K, V, B, L>, key: K) -> Self {
+    pub(crate) fn new(tree: &'a mut PalmTree<K, V, C>, key: K) -> Self {
         if let Some(ref mut root) = tree.root {
             match PathedPointer::exact_key(root, &key) {
                 Ok(cursor) => Self::Occupied(OccupiedEntry { tree, cursor }),
@@ -44,23 +35,21 @@ where
 
 // Vacant entry
 
-pub struct VacantEntry<'a, K, V, B, L>
+pub struct VacantEntry<'a, K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    tree: &'a mut PalmTree<K, V, B, L>,
-    cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
+    tree: &'a mut PalmTree<K, V, C>,
+    cursor: PathedPointer<&'a mut (K, V), K, V, C>,
     key: K,
 }
 
-impl<'a, K, V, B, L> VacantEntry<'a, K, V, B, L>
+impl<'a, K, V, C> VacantEntry<'a, K, V, C>
 where
     K: 'a + Ord + Clone,
     V: 'a,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub fn key(&self) -> &K {
         &self.key
@@ -111,12 +100,11 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Debug for VacantEntry<'a, K, V, B, L>
+impl<'a, K, V, C> Debug for VacantEntry<'a, K, V, C>
 where
     K: Ord + Clone + Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "VacantEntry({:?})", self.key())
@@ -125,22 +113,20 @@ where
 
 // Occupied entry
 
-pub struct OccupiedEntry<'a, K, V, B, L>
+pub struct OccupiedEntry<'a, K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    tree: &'a mut PalmTree<K, V, B, L>,
-    cursor: PathedPointer<&'a mut (K, V), K, V, B, L>,
+    tree: &'a mut PalmTree<K, V, C>,
+    cursor: PathedPointer<&'a mut (K, V), K, V, C>,
 }
 
-impl<'a, K, V, B, L> OccupiedEntry<'a, K, V, B, L>
+impl<'a, K, V, C> OccupiedEntry<'a, K, V, C>
 where
     K: 'a + Ord + Clone,
     V: 'a,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub fn key(&self) -> &K {
         unsafe { self.cursor.key() }.unwrap()
@@ -172,12 +158,11 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Debug for OccupiedEntry<'a, K, V, B, L>
+impl<'a, K, V, C> Debug for OccupiedEntry<'a, K, V, C>
 where
     K: Ord + Clone + Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "OccupiedEntry({:?} => {:?})", self.key(), self.get())

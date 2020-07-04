@@ -1,18 +1,12 @@
-use crate::{
-    arch::prefetch,
-    branch::{node::Node, Branch},
-    leaf::Leaf,
-};
+use crate::{arch::prefetch, branch::Branch, config::TreeConfig, leaf::Leaf};
 use arrayvec::ArrayVec;
-use generic_array::ArrayLength;
 use std::{
     fmt::{Debug, Error, Formatter},
     marker::PhantomData,
 };
-use typenum::{IsGreater, U3};
 
-// type PtrPath<K, V, B, L> = Chunk<(*const Branch<K, V, B, L>, isize), U16>; // FIXME hardcoded max height of 16
-type PtrPath<K, V, B, L> = ArrayVec<[(*const Branch<K, V, B, L>, isize); 16]>;
+// type PtrPath<K, V, C> = Chunk<(*const Branch<K, V, C>, isize), U16>; // FIXME hardcoded max height of 16
+type PtrPath<K, V, C> = ArrayVec<[(*const Branch<K, V, C>, isize); 16]>;
 
 pub(crate) fn find_key_linear<K>(keys: &[K], target: &K) -> Option<usize>
 where
@@ -107,21 +101,19 @@ where
 }
 
 /// A pointer to a leaf entry which can be stepped forwards and backwards.
-pub(crate) struct PathedPointer<Lifetime, K, V, B, L>
+pub(crate) struct PathedPointer<Lifetime, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    stack: PtrPath<K, V, B, L>,
-    leaf: *const Leaf<K, V, L>,
+    stack: PtrPath<K, V, C>,
+    leaf: *const Leaf<K, V, C>,
     index: usize,
     lifetime: PhantomData<Lifetime>,
 }
 
-impl<Lifetime, K, V, B, L> Clone for PathedPointer<Lifetime, K, V, B, L>
+impl<Lifetime, K, V, C> Clone for PathedPointer<Lifetime, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -133,15 +125,14 @@ where
     }
 }
 
-fn walk_path<'a, K, V, B, L>(
-    mut branch: &'a Branch<K, V, B, L>,
+fn walk_path<'a, K, V, C>(
+    mut branch: &'a Branch<K, V, C>,
     key: &K,
-    path: &mut PtrPath<K, V, B, L>,
-) -> Option<&'a Leaf<K, V, L>>
+    path: &mut PtrPath<K, V, C>,
+) -> Option<&'a Leaf<K, V, C>>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     loop {
         if let Some(index) = find_key(branch.keys(), key) {
@@ -158,24 +149,22 @@ where
 }
 
 /// Find the path to the leaf which contains `key` or the closest higher key.
-fn path_for<'a, K, V, B, L>(
-    tree: &'a Branch<K, V, B, L>,
+fn path_for<'a, K, V, C>(
+    tree: &'a Branch<K, V, C>,
     key: &K,
-) -> Option<(PtrPath<K, V, B, L>, &'a Leaf<K, V, L>)>
+) -> Option<(PtrPath<K, V, C>, &'a Leaf<K, V, C>)>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    let mut path: PtrPath<K, V, B, L> = ArrayVec::new();
+    let mut path: PtrPath<K, V, C> = ArrayVec::new();
     walk_path(tree, key, &mut path).map(|leaf| (path, leaf))
 }
 
-impl<Lifetime, K, V, B, L> PathedPointer<Lifetime, K, V, B, L>
+impl<Lifetime, K, V, C> PathedPointer<Lifetime, K, V, C>
 where
     K: Clone + Ord,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     pub(crate) fn null() -> Self {
         Self {
@@ -189,7 +178,7 @@ where
     /// Find `key` and return `Ok(path)` for a key match or `Err(path)` for an absent key with
     /// the path to the leaf it should be in. This path will be null if the key is larger than
     /// the tree's current highest key.
-    pub(crate) fn exact_key(tree: &Branch<K, V, B, L>, key: &K) -> Result<Self, Self> {
+    pub(crate) fn exact_key(tree: &Branch<K, V, C>, key: &K) -> Result<Self, Self> {
         if let Some((stack, leaf)) = path_for(tree, key) {
             match leaf.keys().binary_search(key) {
                 Ok(index) => Ok(Self {
@@ -211,7 +200,7 @@ where
     }
 
     /// Find `key` or the first higher key.
-    pub(crate) fn key_or_higher(tree: &Branch<K, V, B, L>, key: &K) -> Self {
+    pub(crate) fn key_or_higher(tree: &Branch<K, V, C>, key: &K) -> Self {
         let mut ptr = Self::null();
         if let Some((path, leaf)) = path_for(tree, key) {
             ptr.stack = path;
@@ -235,7 +224,7 @@ where
     }
 
     /// Find the first key higher than `key`.
-    pub(crate) fn higher_than_key(tree: &Branch<K, V, B, L>, key: &K) -> Self {
+    pub(crate) fn higher_than_key(tree: &Branch<K, V, C>, key: &K) -> Self {
         let mut ptr = Self::null();
         if let Some((path, leaf)) = path_for(tree, key) {
             ptr.stack = path;
@@ -254,7 +243,7 @@ where
     }
 
     /// Find `key` or the first lower key.
-    pub(crate) fn key_or_lower(tree: &Branch<K, V, B, L>, key: &K) -> Self {
+    pub(crate) fn key_or_lower(tree: &Branch<K, V, C>, key: &K) -> Self {
         if let Some((path, leaf)) = path_for(tree, key) {
             let mut ptr = Self::null();
             ptr.stack = path;
@@ -268,7 +257,7 @@ where
     }
 
     /// Find the first key lower than `key`.
-    pub(crate) fn lower_than_key(tree: &Branch<K, V, B, L>, key: &K) -> Self {
+    pub(crate) fn lower_than_key(tree: &Branch<K, V, C>, key: &K) -> Self {
         if let Some((path, leaf)) = path_for(tree, key) {
             let mut ptr = Self::null();
             ptr.stack = path;
@@ -290,7 +279,7 @@ where
     }
 
     /// Find the lowest key in the tree.
-    pub(crate) fn lowest(tree: &Branch<K, V, B, L>) -> Self {
+    pub(crate) fn lowest(tree: &Branch<K, V, C>) -> Self {
         let mut branch = tree;
         let mut stack = PtrPath::new();
         loop {
@@ -312,7 +301,7 @@ where
     }
 
     /// Find the highest key in the tree.
-    pub(crate) fn highest(tree: &Branch<K, V, B, L>) -> Self {
+    pub(crate) fn highest(tree: &Branch<K, V, C>) -> Self {
         let mut branch = tree;
         let mut stack = PtrPath::new();
         loop {
@@ -435,7 +424,7 @@ where
         if leaf.is_empty() {
             loop {
                 if let Some((branch, index)) = self.stack.pop() {
-                    let branch = &mut *(branch as *mut Branch<K, V, B, L>);
+                    let branch = &mut *(branch as *mut Branch<K, V, C>);
                     let index = index as usize;
                     if branch.has_leaves() {
                         branch.remove_leaf(index);
@@ -470,7 +459,7 @@ where
             // Walk up the tree to find somewhere to split.
             loop {
                 if let Some((branch, index)) = self.stack.pop() {
-                    let branch = &mut *(branch as *mut Branch<K, V, B, L>);
+                    let branch = &mut *(branch as *mut Branch<K, V, C>);
                     let index = index as usize;
                     if !branch.is_full() {
                         let choose_index = if branch.has_branches() {
@@ -556,7 +545,7 @@ where
     /// be higher than the tree's current maximum.
     pub(crate) unsafe fn push_last(
         mut self,
-        root: &mut Branch<K, V, B, L>,
+        root: &mut Branch<K, V, C>,
         key: K,
         value: V,
     ) -> Result<Self, (K, V)> {
@@ -586,29 +575,26 @@ where
         self.leaf.is_null()
     }
 
-    pub(crate) unsafe fn deref_leaf_unchecked<'a>(&'a self) -> &'a Leaf<K, V, L> {
+    pub(crate) unsafe fn deref_leaf_unchecked<'a>(&'a self) -> &'a Leaf<K, V, C> {
         &*self.leaf
     }
 
-    pub(crate) unsafe fn deref_mut_leaf_unchecked<'a>(&'a mut self) -> &'a mut Leaf<K, V, L> {
-        let ptr = self.leaf as *mut Leaf<K, V, L>;
+    pub(crate) unsafe fn deref_mut_leaf_unchecked<'a>(&'a mut self) -> &'a mut Leaf<K, V, C> {
+        let ptr = self.leaf as *mut Leaf<K, V, C>;
         &mut *ptr
     }
 
-    pub(crate) unsafe fn deref_leaf<'a>(&'a self) -> Option<&'a Leaf<K, V, L>> {
+    pub(crate) unsafe fn deref_leaf<'a>(&'a self) -> Option<&'a Leaf<K, V, C>> {
         self.leaf.as_ref()
     }
 
-    pub(crate) unsafe fn deref_mut_leaf<'a>(&'a mut self) -> Option<&'a mut Leaf<K, V, L>> {
-        (self.leaf as *mut Leaf<K, V, L>).as_mut()
+    pub(crate) unsafe fn deref_mut_leaf<'a>(&'a mut self) -> Option<&'a mut Leaf<K, V, C>> {
+        (self.leaf as *mut Leaf<K, V, C>).as_mut()
     }
 
-    pub(crate) unsafe fn into_entry_mut<'a>(self) -> (&'a mut K, &'a mut V)
-    where
-        L: 'a,
-    {
+    pub(crate) unsafe fn into_entry_mut<'a>(self) -> (&'a mut K, &'a mut V) {
         let index = self.index;
-        let leaf = &mut *(self.leaf as *mut Leaf<K, V, L>);
+        let leaf = &mut *(self.leaf as *mut Leaf<K, V, C>);
         let key: *mut K = &mut leaf.keys_mut()[index];
         let value: *mut V = &mut leaf.values_mut()[index];
         (&mut *key, &mut *value)
@@ -635,10 +621,9 @@ where
     }
 }
 
-impl<Lifetime, K, V, B, L> Debug for PathedPointer<Lifetime, K, V, B, L>
+impl<Lifetime, K, V, C> Debug for PathedPointer<Lifetime, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "PathedPointer")

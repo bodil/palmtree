@@ -1,28 +1,24 @@
 use super::paths_from_range;
-use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use generic_array::ArrayLength;
+use crate::{config::TreeConfig, search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
     iter::FusedIterator,
     ops::RangeBounds,
 };
-use typenum::{IsGreater, U3};
 
-pub struct IterMut<'a, K, V, B, L>
+pub struct IterMut<'a, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    left: PathedPointer<&'a mut (K, V), K, V, B, L>,
-    right: PathedPointer<&'a mut (K, V), K, V, B, L>,
+    left: PathedPointer<&'a mut (K, V), K, V, C>,
+    right: PathedPointer<&'a mut (K, V), K, V, C>,
 }
 
-impl<'a, K, V, B, L> IterMut<'a, K, V, B, L>
+impl<'a, K, V, C> IterMut<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     fn null() -> Self {
         Self {
@@ -43,7 +39,7 @@ where
     /// let mut it2 = tree.iter_mut();
     /// assert_eq!(it1.next(), it2.next());
     /// ```
-    pub(crate) fn new<R>(tree: &'a mut PalmTree<K, V, B, L>, range: R) -> Self
+    pub(crate) fn new<R>(tree: &'a mut PalmTree<K, V, C>, range: R) -> Self
     where
         R: RangeBounds<K>,
     {
@@ -64,12 +60,12 @@ where
         debug_assert!(result);
     }
 
-    fn left(&mut self) -> &'a mut PathedPointer<&'a mut (), K, V, B, L> {
-        unsafe { &mut *(&mut self.left as *mut _ as *mut PathedPointer<&'a mut (), K, V, B, L>) }
+    fn left(&mut self) -> &'a mut PathedPointer<&'a mut (), K, V, C> {
+        unsafe { &mut *(&mut self.left as *mut _ as *mut PathedPointer<&'a mut (), K, V, C>) }
     }
 
-    fn right(&mut self) -> &'a mut PathedPointer<&'a mut (), K, V, B, L> {
-        unsafe { &mut *(&mut self.right as *mut _ as *mut PathedPointer<&'a mut (), K, V, B, L>) }
+    fn right(&mut self) -> &'a mut PathedPointer<&'a mut (), K, V, C> {
+        unsafe { &mut *(&mut self.right as *mut _ as *mut PathedPointer<&'a mut (), K, V, C>) }
     }
 
     fn left_key(&mut self) -> Option<&'a K> {
@@ -89,11 +85,10 @@ where
     }
 }
 
-impl<'a, K, V, B, L> Iterator for IterMut<'a, K, V, B, L>
+impl<'a, K, V, C> Iterator for IterMut<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     type Item = (&'a K, &'a mut V);
 
@@ -118,12 +113,11 @@ where
     }
 }
 
-impl<'a, K, V, B, L> DoubleEndedIterator for IterMut<'a, K, V, B, L>
+impl<'a, K, V, C> DoubleEndedIterator for IterMut<'a, K, V, C>
 where
     K: 'a + Clone + Ord,
     V: 'a,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         let left_key = self.left_key()?;
@@ -146,18 +140,16 @@ where
     }
 }
 
-impl<'a, K, V, B, L> FusedIterator for IterMut<'a, K, V, B, L>
+impl<'a, K, V, C> FusedIterator for IterMut<'a, K, V, C>
 where
     K: Clone + Ord,
-    B: 'a + ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: 'a + ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
 }
 
-impl<'a, K, V, B, L> Debug for IterMut<'a, K, V, B, L>
+impl<'a, K, V, C> Debug for IterMut<'a, K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: 'a + TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "IterMut")

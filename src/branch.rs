@@ -1,33 +1,31 @@
 use crate::{
     array::Array,
+    config::TreeConfig,
     leaf::Leaf,
     search::{find_key, find_key_linear},
     InsertResult,
 };
-use generic_array::ArrayLength;
 use node::Node;
 use std::fmt::{Debug, Error, Formatter};
-use typenum::{IsGreater, U3};
+use typenum::Unsigned;
 
 // Never leak this monster to the rest of the crate.
 pub(crate) mod node;
 
 /// A branch node holds mappings of high keys to child nodes.
-pub(crate) struct Branch<K, V, B, L>
+pub(crate) struct Branch<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     has_branches: bool,
     length: usize,
-    keys: Array<K, B>,
-    children: Array<Node<K, V, B, L>, B>,
+    keys: Array<K, C::BranchSize>,
+    children: Array<Node<K, V, C>, C::BranchSize>,
 }
 
-impl<K, V, B, L> Drop for Branch<K, V, B, L>
+impl<K, V, C> Drop for Branch<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn drop(&mut self) {
         unsafe {
@@ -48,12 +46,11 @@ where
     }
 }
 
-impl<K, V, B, L> Clone for Branch<K, V, B, L>
+impl<K, V, C> Clone for Branch<K, V, C>
 where
     K: Clone,
     V: Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn clone(&self) -> Self {
         let children = unsafe {
@@ -75,10 +72,9 @@ where
     }
 }
 
-impl<K, V, B, L> Branch<K, V, B, L>
+impl<K, V, C> Branch<K, V, C>
 where
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     #[inline(always)]
     pub(crate) fn new(has_branches: bool) -> Self {
@@ -102,7 +98,7 @@ where
 
     #[inline(always)]
     pub(crate) fn is_full(&self) -> bool {
-        self.len() == B::USIZE
+        self.len() == C::BranchSize::USIZE
     }
 
     #[inline(always)]
@@ -131,55 +127,55 @@ where
     }
 
     #[inline(always)]
-    fn children(&self) -> &[Node<K, V, B, L>] {
+    fn children(&self) -> &[Node<K, V, C>] {
         unsafe { self.children.deref(self.length) }
     }
 
     #[inline(always)]
-    fn children_mut(&mut self) -> &mut [Node<K, V, B, L>] {
+    fn children_mut(&mut self) -> &mut [Node<K, V, C>] {
         unsafe { self.children.deref_mut(self.length) }
     }
 
     #[inline(always)]
-    pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V, B, L> {
+    pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V, C> {
         debug_assert!(self.has_branches());
         unsafe { self.children()[index].as_branch() }
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn get_branch_unchecked(&self, index: usize) -> &Branch<K, V, B, L> {
+    pub(crate) unsafe fn get_branch_unchecked(&self, index: usize) -> &Branch<K, V, C> {
         debug_assert!(self.has_branches());
         debug_assert!(self.len() > index);
         self.children().get_unchecked(index).as_branch()
     }
 
     #[inline(always)]
-    pub(crate) fn get_leaf(&self, index: usize) -> &Leaf<K, V, L> {
+    pub(crate) fn get_leaf(&self, index: usize) -> &Leaf<K, V, C> {
         debug_assert!(self.has_leaves());
         unsafe { self.children()[index].as_leaf() }
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn get_leaf_unchecked(&self, index: usize) -> &Leaf<K, V, L> {
+    pub(crate) unsafe fn get_leaf_unchecked(&self, index: usize) -> &Leaf<K, V, C> {
         debug_assert!(self.has_leaves());
         debug_assert!(self.len() > index);
         self.children().get_unchecked(index).as_leaf()
     }
 
     #[inline(always)]
-    pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Branch<K, V, B, L> {
+    pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Branch<K, V, C> {
         debug_assert!(self.has_branches());
         unsafe { self.children_mut()[index].as_branch_mut() }
     }
 
     #[inline(always)]
-    pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V, L> {
+    pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V, C> {
         debug_assert!(self.has_leaves());
         unsafe { self.children_mut()[index].as_leaf_mut() }
     }
 
     #[inline(always)]
-    pub(crate) fn push_branch(&mut self, key: K, branch: Box<Branch<K, V, B, L>>) {
+    pub(crate) fn push_branch(&mut self, key: K, branch: Box<Branch<K, V, C>>) {
         debug_assert!(self.has_branches());
         debug_assert!(!self.is_full());
         unsafe {
@@ -190,7 +186,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn push_leaf(&mut self, key: K, leaf: Box<Leaf<K, V, L>>) {
+    pub(crate) fn push_leaf(&mut self, key: K, leaf: Box<Leaf<K, V, C>>) {
         debug_assert!(self.has_leaves());
         debug_assert!(!self.is_full());
         unsafe {
@@ -201,7 +197,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_branch(&mut self, index: usize) -> (K, Box<Branch<K, V, B, L>>) {
+    pub(crate) fn remove_branch(&mut self, index: usize) -> (K, Box<Branch<K, V, C>>) {
         debug_assert!(self.has_branches());
         debug_assert!(index < self.length);
         let result = unsafe {
@@ -215,7 +211,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_leaf(&mut self, index: usize) -> (K, Box<Leaf<K, V, L>>) {
+    pub(crate) fn remove_leaf(&mut self, index: usize) -> (K, Box<Leaf<K, V, C>>) {
         debug_assert!(self.has_leaves());
         debug_assert!(index < self.length);
         let result = unsafe {
@@ -229,7 +225,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_last_branch(&mut self) -> (K, Box<Branch<K, V, B, L>>) {
+    pub(crate) fn remove_last_branch(&mut self) -> (K, Box<Branch<K, V, C>>) {
         debug_assert!(self.has_branches());
         debug_assert!(!self.is_empty());
         let result = unsafe {
@@ -246,12 +242,12 @@ where
     pub(crate) fn push_branch_pair(
         &mut self,
         left_key: K,
-        left: Box<Branch<K, V, B, L>>,
+        left: Box<Branch<K, V, C>>,
         right_key: K,
-        right: Box<Branch<K, V, B, L>>,
+        right: Box<Branch<K, V, C>>,
     ) {
         debug_assert!(self.has_branches());
-        debug_assert!(self.len() + 2 <= B::USIZE);
+        debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
         unsafe {
             self.keys
                 .insert_pair(self.length, self.length, left_key, right_key);
@@ -266,12 +262,12 @@ where
         &mut self,
         index: usize,
         left_key: K,
-        left: Box<Branch<K, V, B, L>>,
+        left: Box<Branch<K, V, C>>,
         right_key: K,
-        right: Box<Branch<K, V, B, L>>,
+        right: Box<Branch<K, V, C>>,
     ) {
         debug_assert!(self.has_branches());
-        debug_assert!(self.len() + 2 <= B::USIZE);
+        debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
         unsafe {
             self.keys
                 .insert_pair(self.length, index, left_key, right_key);
@@ -286,12 +282,12 @@ where
         &mut self,
         index: usize,
         left_key: K,
-        left: Box<Leaf<K, V, L>>,
+        left: Box<Leaf<K, V, C>>,
         right_key: K,
-        right: Box<Leaf<K, V, L>>,
+        right: Box<Leaf<K, V, C>>,
     ) {
         debug_assert!(self.has_leaves());
-        debug_assert!(self.len() + 2 <= B::USIZE);
+        debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
         unsafe {
             self.keys
                 .insert_pair(self.length, index, left_key, right_key);
@@ -301,7 +297,7 @@ where
         self.length += 2;
     }
 
-    pub(crate) fn split(mut self: Box<Self>) -> (Box<Branch<K, V, B, L>>, Box<Branch<K, V, B, L>>) {
+    pub(crate) fn split(mut self: Box<Self>) -> (Box<Branch<K, V, C>>, Box<Branch<K, V, C>>) {
         let half = self.len() / 2;
         let right = Box::new(Branch {
             has_branches: self.has_branches,
@@ -314,13 +310,12 @@ where
     }
 }
 
-impl<K, V, B, L> Branch<K, V, B, L>
+impl<K, V, C> Branch<K, V, C>
 where
     K: Ord + Clone,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
-    pub(crate) fn unit(leaf: Box<Leaf<K, V, L>>) -> Self {
+    pub(crate) fn unit(leaf: Box<Leaf<K, V, C>>) -> Self {
         Branch {
             has_branches: false,
             length: 1,
@@ -448,12 +443,11 @@ where
     }
 }
 
-impl<K, V, B, L> Branch<K, V, B, L>
+impl<K, V, C> Branch<K, V, C>
 where
     K: Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn tree_fmt(&self, f: &mut Formatter<'_>, level: usize) -> Result<(), Error> {
         let mut indent = String::new();
@@ -478,12 +472,11 @@ where
     }
 }
 
-impl<K, V, B, L> Debug for Branch<K, V, B, L>
+impl<K, V, C> Debug for Branch<K, V, C>
 where
     K: Debug,
     V: Debug,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         self.tree_fmt(f, 0)

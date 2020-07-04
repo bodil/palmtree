@@ -1,12 +1,10 @@
 #![allow(unreachable_pub)] // pub exports below erroneously complain without this
 
-use crate::{branch::node::Node, search::PathedPointer, PalmTree};
-use generic_array::ArrayLength;
+use crate::{config::TreeConfig, search::PathedPointer, PalmTree};
 use std::{
     cmp::Ordering,
     ops::{Bound, RangeBounds},
 };
-use typenum::{IsGreater, U3};
 
 mod ref_iter;
 pub use ref_iter::Iter;
@@ -20,18 +18,17 @@ pub use owned::OwnedIter;
 mod merge;
 pub use merge::MergeIter;
 
-fn paths_from_range<'a, Lifetime, K, V, B, L, R>(
-    tree: &'a PalmTree<K, V, B, L>,
+fn paths_from_range<'a, Lifetime, K, V, C, R>(
+    tree: &'a PalmTree<K, V, C>,
     range: R,
 ) -> Option<(
-    PathedPointer<Lifetime, K, V, B, L>,
-    PathedPointer<Lifetime, K, V, B, L>,
+    PathedPointer<Lifetime, K, V, C>,
+    PathedPointer<Lifetime, K, V, C>,
 )>
 where
     K: Clone + Ord,
     R: RangeBounds<K>,
-    B: ArrayLength<K> + ArrayLength<Node<K, V, B, L>> + IsGreater<U3>,
-    L: ArrayLength<K> + ArrayLength<V> + IsGreater<U3>,
+    C: TreeConfig<K, V>,
 {
     match (range.start_bound(), range.end_bound()) {
         (Bound::Excluded(left), Bound::Excluded(right)) if left == right => {
