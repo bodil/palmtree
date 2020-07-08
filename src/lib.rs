@@ -26,7 +26,7 @@ use std::{
 mod arch;
 mod array;
 mod branch;
-pub mod config;
+mod config;
 mod entry;
 mod iter;
 mod leaf;
@@ -35,7 +35,7 @@ mod search;
 use branch::Branch;
 use leaf::Leaf;
 
-use config::{Tree64, TreeConfig};
+pub use config::{Tree64, TreeConfig};
 pub use entry::Entry;
 pub use iter::{Iter, IterMut, MergeIter, OwnedIter};
 use search::PathedPointer;
