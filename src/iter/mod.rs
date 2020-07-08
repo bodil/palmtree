@@ -92,12 +92,9 @@ mod test {
     fn iterate_single_leaf() {
         let size = 64usize;
         let tree = StdPalmTree::load((0..size).map(|i| (i, i)));
-        // let expected: Vec<_> = (0..size).map(|i| (i, i)).collect();
-        // let result: Vec<_> = tree.iter().map(|(k, v)| (*k, *v)).collect();
         tree.iter().for_each(|i| {
             criterion::black_box(i);
         });
-        // assert_eq!(expected, result);
     }
 
     #[test]
@@ -181,9 +178,6 @@ mod test {
         tree.insert(0, 0);
         tree.insert(1, 136);
         tree.remove(&1);
-
-        // println!("{:?}", tree);
-
         let result: Vec<(u8, u8)> = tree.range(1..2).map(|(k, v)| (*k, *v)).collect();
         let expected: Vec<(u8, u8)> = vec![];
         assert_eq!(expected, result);
@@ -272,9 +266,6 @@ mod test {
             (255, 54),
         ];
         let tree: StdPalmTree<u8, u8> = StdPalmTree::load(input.clone().into_iter());
-
-        // println!("{:?}", tree);
-
         let result: Vec<(u8, u8)> = tree.range(..253).map(|(k, v)| (*k, *v)).collect();
         let expected: Vec<(u8, u8)> = input.into_iter().filter(|(k, _)| k < &253).collect();
         assert_eq!(expected, result);

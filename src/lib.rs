@@ -690,9 +690,7 @@ mod test {
         let iters = 131_072;
         for i in 0..iters {
             tree.insert(i, i);
-            // println!("{:?}", tree);
         }
-        // println!("{:?}", tree);
         for i in 0..iters {
             assert_eq!(Some(&i), tree.get(&i));
         }
@@ -702,7 +700,6 @@ mod test {
     fn load_from_ordered_stream() {
         let size = 131_072;
         let tree: StdPalmTree<usize, usize> = PalmTree::load((0..size).map(|i| (i, i)));
-        // println!("{:?}", tree);
         for i in 0..size {
             assert_eq!(Some(&i), tree.get(&i));
         }
