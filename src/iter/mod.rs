@@ -277,7 +277,6 @@ mod test {
 
         let result: Vec<(u8, u8)> = tree.range(..253).map(|(k, v)| (*k, *v)).collect();
         let expected: Vec<(u8, u8)> = input
-            .clone()
             .into_iter()
             .filter(|(k, _)| k < &253)
             .collect();

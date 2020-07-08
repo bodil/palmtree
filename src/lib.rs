@@ -10,6 +10,8 @@
     // missing_docs,
     missing_doc_code_examples
 )]
+#![allow(clippy::question_mark)] // this lint makes code less readable
+#![allow(clippy::large_enum_variant)] // this lint is buggy
 #![cfg_attr(core_intrinsics, feature(core_intrinsics))]
 
 use std::fmt::{Debug, Error, Formatter};
@@ -234,7 +236,7 @@ where
         IterMut::new(self, range)
     }
 
-    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V, C> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, C> {
         Entry::new(self, key)
     }
 
@@ -349,6 +351,7 @@ where
         }
     }
 
+    #[allow(clippy::borrowed_box)]
     fn split_root(root: &mut Box<Branch<K, V, C>>) {
         let old_root = std::mem::replace(root, Branch::new(true).into());
         let (left, right) = old_root.split();
@@ -536,7 +539,7 @@ where
 {
     fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: I) {
         for (k, v) in iter {
-            self.insert(k.clone(), v.clone());
+            self.insert(*k, *v);
         }
     }
 }
@@ -575,7 +578,7 @@ where
     fn add(self, other: &PalmTree<K, V, C2>) -> Self::Output {
         Self::load(Self::merge_right_from(
             self.into_iter(),
-            other.iter().map(|(k, v)| (k.clone(), v.clone())),
+            other.iter().map(|(k, v)| (*k, *v)),
         ))
     }
 }
@@ -594,7 +597,7 @@ where
         } else {
             *self = Self::load(Self::merge_right_from(
                 OwnedIter::new(root, self.size),
-                other.iter().map(|(k, v)| (k.clone(), v.clone())),
+                other.iter().map(|(k, v)| (*k, *v)),
             ))
         }
     }

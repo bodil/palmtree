@@ -118,7 +118,7 @@ where
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
-            leaf: self.leaf.clone(),
+            leaf: self.leaf,
             index: self.index,
             lifetime: PhantomData,
         }
@@ -422,23 +422,20 @@ where
         let leaf = self.deref_mut_leaf().unwrap();
         let (key, value) = leaf.remove_unchecked(index);
         if leaf.is_empty() {
-            loop {
-                if let Some((branch, index)) = self.stack.pop() {
-                    let branch = &mut *(branch as *mut Branch<K, V, C>);
-                    let index = index as usize;
-                    if branch.has_leaves() {
-                        branch.remove_leaf(index);
-                    } else {
-                        branch.remove_branch(index);
-                    }
-                    if !branch.is_empty() {
-                        break;
-                    }
+            while let Some((branch, index)) = self.stack.pop() {
+                let branch = &mut *(branch as *mut Branch<K, V, C>);
+                let index = index as usize;
+                if branch.has_leaves() {
+                    branch.remove_leaf(index);
                 } else {
+                    branch.remove_branch(index);
+                }
+                if !branch.is_empty() {
                     break;
                 }
             }
         }
+
         (key, value)
     }
 
@@ -600,21 +597,21 @@ where
         (&mut *key, &mut *value)
     }
 
-    pub(crate) unsafe fn key<'a>(&'a self) -> Option<&'a K> {
+    pub(crate) unsafe fn key(&self) -> Option<&K> {
         self.deref_leaf()
             .map(|leaf| leaf.keys().get_unchecked(self.index))
     }
 
-    pub(crate) unsafe fn key_unchecked<'a>(&'a self) -> &'a K {
+    pub(crate) unsafe fn key_unchecked(&self) -> &K {
         self.deref_leaf_unchecked().keys().get_unchecked(self.index)
     }
 
-    pub(crate) unsafe fn value<'a>(&'a self) -> Option<&'a V> {
+    pub(crate) unsafe fn value(&self) -> Option<&V> {
         self.deref_leaf()
             .map(|leaf| leaf.values().get_unchecked(self.index))
     }
 
-    pub(crate) unsafe fn value_mut<'a>(&'a mut self) -> Option<&'a mut V> {
+    pub(crate) unsafe fn value_mut(&mut self) -> Option<&mut V> {
         let index = self.index;
         self.deref_mut_leaf()
             .map(|leaf| leaf.values_mut().get_unchecked_mut(index))
