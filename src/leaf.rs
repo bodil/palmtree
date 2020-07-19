@@ -1,4 +1,4 @@
-use crate::{array::Array, config::TreeConfig, InsertResult};
+use crate::{array::Array, config::TreeConfig, pointer::Pointer, InsertResult};
 use std::fmt::{Debug, Error, Formatter};
 use typenum::Unsigned;
 
@@ -91,15 +91,25 @@ where
         unsafe { self.values.deref_mut(self.length) }
     }
 
-    pub(crate) fn split(mut self: Box<Self>) -> (Box<Leaf<K, V, C>>, Box<Leaf<K, V, C>>) {
-        let half = self.length / 2;
-        let right = Box::new(Leaf {
-            length: half,
-            keys: unsafe { Array::steal_from(&mut self.keys, self.length, half) },
-            values: unsafe { Array::steal_from(&mut self.values, self.length, half) },
-        });
-        self.length -= half;
-        (self, right)
+    pub(crate) fn split(
+        mut this: Pointer<Self, C::PointerKind>,
+    ) -> (Pointer<Self, C::PointerKind>, Pointer<Self, C::PointerKind>)
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let right = {
+            let this = Pointer::make_mut(&mut this);
+            let half = this.length / 2;
+            let right = Pointer::new(Leaf {
+                length: half,
+                keys: unsafe { Array::steal_from(&mut this.keys, this.length, half) },
+                values: unsafe { Array::steal_from(&mut this.values, this.length, half) },
+            });
+            this.length -= half;
+            right
+        };
+        (this, right)
     }
 
     pub(crate) unsafe fn push_unchecked(&mut self, key: K, value: V) {

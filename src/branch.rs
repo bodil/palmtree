@@ -2,6 +2,7 @@ use crate::{
     array::Array,
     config::TreeConfig,
     leaf::Leaf,
+    pointer::Pointer,
     search::{find_key, find_key_linear},
     InsertResult,
 };
@@ -56,11 +57,12 @@ where
         let children = unsafe {
             if self.has_branches() {
                 self.children.clone_with(self.length, |node| {
-                    Box::new(node.as_branch().clone()).into()
+                    Pointer::new(node.as_branch().clone()).into()
                 })
             } else {
-                self.children
-                    .clone_with(self.length, |node| Box::new(node.as_leaf().clone()).into())
+                self.children.clone_with(self.length, |node| {
+                    Pointer::new(node.as_leaf().clone()).into()
+                })
             }
         };
         Self {
@@ -137,13 +139,13 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn get_branch(&self, index: usize) -> &Branch<K, V, C> {
+    pub(crate) fn get_branch(&self, index: usize) -> &Self {
         debug_assert!(self.has_branches());
         unsafe { self.children()[index].as_branch() }
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn get_branch_unchecked(&self, index: usize) -> &Branch<K, V, C> {
+    pub(crate) unsafe fn get_branch_unchecked(&self, index: usize) -> &Self {
         debug_assert!(self.has_branches());
         debug_assert!(self.len() > index);
         self.children().get_unchecked(index).as_branch()
@@ -163,19 +165,27 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Branch<K, V, C> {
+    pub(crate) fn get_branch_mut(&mut self, index: usize) -> &mut Self
+    where
+        K: Clone,
+        V: Clone,
+    {
         debug_assert!(self.has_branches());
         unsafe { self.children_mut()[index].as_branch_mut() }
     }
 
     #[inline(always)]
-    pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V, C> {
+    pub(crate) fn get_leaf_mut(&mut self, index: usize) -> &mut Leaf<K, V, C>
+    where
+        K: Clone,
+        V: Clone,
+    {
         debug_assert!(self.has_leaves());
         unsafe { self.children_mut()[index].as_leaf_mut() }
     }
 
     #[inline(always)]
-    pub(crate) fn push_branch(&mut self, key: K, branch: Box<Branch<K, V, C>>) {
+    pub(crate) fn push_branch(&mut self, key: K, branch: Pointer<Self, C::PointerKind>) {
         debug_assert!(self.has_branches());
         debug_assert!(!self.is_full());
         unsafe {
@@ -186,7 +196,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn push_leaf(&mut self, key: K, leaf: Box<Leaf<K, V, C>>) {
+    pub(crate) fn push_leaf(&mut self, key: K, leaf: Pointer<Leaf<K, V, C>, C::PointerKind>) {
         debug_assert!(self.has_leaves());
         debug_assert!(!self.is_full());
         unsafe {
@@ -197,7 +207,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_branch(&mut self, index: usize) -> (K, Box<Branch<K, V, C>>) {
+    pub(crate) fn remove_branch(&mut self, index: usize) -> (K, Pointer<Self, C::PointerKind>) {
         debug_assert!(self.has_branches());
         debug_assert!(index < self.length);
         let result = unsafe {
@@ -211,7 +221,10 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_leaf(&mut self, index: usize) -> (K, Box<Leaf<K, V, C>>) {
+    pub(crate) fn remove_leaf(
+        &mut self,
+        index: usize,
+    ) -> (K, Pointer<Leaf<K, V, C>, C::PointerKind>) {
         debug_assert!(self.has_leaves());
         debug_assert!(index < self.length);
         let result = unsafe {
@@ -225,7 +238,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn remove_last_branch(&mut self) -> (K, Box<Branch<K, V, C>>) {
+    pub(crate) fn remove_last_branch(&mut self) -> (K, Pointer<Self, C::PointerKind>) {
         debug_assert!(self.has_branches());
         debug_assert!(!self.is_empty());
         let result = unsafe {
@@ -242,9 +255,9 @@ where
     pub(crate) fn push_branch_pair(
         &mut self,
         left_key: K,
-        left: Box<Branch<K, V, C>>,
+        left: Pointer<Self, C::PointerKind>,
         right_key: K,
-        right: Box<Branch<K, V, C>>,
+        right: Pointer<Self, C::PointerKind>,
     ) {
         debug_assert!(self.has_branches());
         debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
@@ -262,9 +275,9 @@ where
         &mut self,
         index: usize,
         left_key: K,
-        left: Box<Branch<K, V, C>>,
+        left: Pointer<Self, C::PointerKind>,
         right_key: K,
-        right: Box<Branch<K, V, C>>,
+        right: Pointer<Self, C::PointerKind>,
     ) {
         debug_assert!(self.has_branches());
         debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
@@ -282,9 +295,9 @@ where
         &mut self,
         index: usize,
         left_key: K,
-        left: Box<Leaf<K, V, C>>,
+        left: Pointer<Leaf<K, V, C>, C::PointerKind>,
         right_key: K,
-        right: Box<Leaf<K, V, C>>,
+        right: Pointer<Leaf<K, V, C>, C::PointerKind>,
     ) {
         debug_assert!(self.has_leaves());
         debug_assert!(self.len() + 2 <= C::BranchSize::USIZE);
@@ -297,16 +310,26 @@ where
         self.length += 2;
     }
 
-    pub(crate) fn split(mut self: Box<Self>) -> (Box<Branch<K, V, C>>, Box<Branch<K, V, C>>) {
-        let half = self.len() / 2;
-        let right = Box::new(Branch {
-            has_branches: self.has_branches,
-            length: half,
-            keys: unsafe { Array::steal_from(&mut self.keys, self.length, half) },
-            children: unsafe { Array::steal_from(&mut self.children, self.length, half) },
-        });
-        self.length -= half;
-        (self, right)
+    pub(crate) fn split(
+        mut this: Pointer<Self, C::PointerKind>,
+    ) -> (Pointer<Self, C::PointerKind>, Pointer<Self, C::PointerKind>)
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let right = {
+            let this = Pointer::make_mut(&mut this);
+            let half = this.len() / 2;
+            let right = Pointer::new(Branch {
+                has_branches: this.has_branches,
+                length: half,
+                keys: unsafe { Array::steal_from(&mut this.keys, this.length, half) },
+                children: unsafe { Array::steal_from(&mut this.children, this.length, half) },
+            });
+            this.length -= half;
+            right
+        };
+        (this, right)
     }
 }
 
@@ -315,7 +338,7 @@ where
     K: Ord + Clone,
     C: TreeConfig<K, V>,
 {
-    pub(crate) fn unit(leaf: Box<Leaf<K, V, C>>) -> Self {
+    pub(crate) fn unit(leaf: Pointer<Leaf<K, V, C>, C::PointerKind>) -> Self {
         Branch {
             has_branches: false,
             length: 1,
@@ -355,7 +378,10 @@ where
         }
     }
 
-    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V>
+    where
+        V: Clone,
+    {
         let mut branch = self;
         loop {
             if branch.is_empty() {
@@ -373,7 +399,10 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertResult<K, V> {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertResult<K, V>
+    where
+        V: Clone,
+    {
         // TODO: this algorithm could benefit from the addition of neighbour
         // checking to reduce splitting.
         if let Some(index) = find_key(self.keys(), &key) {
@@ -398,12 +427,12 @@ where
                 // FIXME should determine which of the split branches to insert into instead of rechecking from the parent branch.
                 // Same for leaf splitting below, and splitting in >max case further below.
                 let (removed_key, removed_branch) = self.remove_branch(index);
-                let (left, right) = removed_branch.split();
+                let (left, right) = Self::split(removed_branch);
                 self.insert_branch_pair(index, left.highest().clone(), left, removed_key, right);
                 self.insert(key, value)
             } else {
                 let (removed_key, removed_leaf) = self.remove_leaf(index);
-                let (left, right) = removed_leaf.split();
+                let (left, right) = Leaf::split(removed_leaf);
                 self.insert_leaf_pair(index, left.highest().clone(), left, removed_key, right);
                 self.insert(key, value)
             }
@@ -431,11 +460,11 @@ where
                 InsertResult::Full(key, value)
             } else if self.has_branches() {
                 let (removed_key, removed_branch) = self.remove_last_branch();
-                let (left, right) = removed_branch.split();
+                let (left, right) = Self::split(removed_branch);
                 self.push_branch_pair(left.highest().clone(), left, removed_key, right);
                 self.insert(key, value)
             } else {
-                let leaf = Box::new(Leaf::unit(key.clone(), value));
+                let leaf = Pointer::new(Leaf::unit(key.clone(), value));
                 self.push_leaf(key, leaf);
                 InsertResult::Added
             }
@@ -445,8 +474,8 @@ where
 
 impl<K, V, C> Branch<K, V, C>
 where
-    K: Debug,
-    V: Debug,
+    K: Clone + Debug,
+    V: Clone + Debug,
     C: TreeConfig<K, V>,
 {
     fn tree_fmt(&self, f: &mut Formatter<'_>, level: usize) -> Result<(), Error> {
@@ -474,8 +503,8 @@ where
 
 impl<K, V, C> Debug for Branch<K, V, C>
 where
-    K: Debug,
-    V: Debug,
+    K: Clone + Debug,
+    V: Clone + Debug,
     C: TreeConfig<K, V>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {

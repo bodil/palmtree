@@ -1,111 +1,82 @@
-use crate::{branch::Branch, config::TreeConfig, leaf::Leaf};
+use crate::{branch::Branch, config::TreeConfig, leaf::Leaf, pointer::Pointer};
 use std::{
     fmt::{Debug, Error, Formatter},
     marker::PhantomData,
-    ptr::NonNull,
+    mem::ManuallyDrop,
 };
 
 pub struct Node<K, V, C>
 where
-    C: ?Sized,
+    C: ?Sized + TreeConfig<K, V>,
 {
     types: PhantomData<(K, V, C)>,
-    node: NonNull<()>,
+    node: ManuallyDrop<Pointer<(), C::PointerKind>>,
 }
 
-impl<K, V, C> Drop for Node<K, V, C>
-where
-    C: ?Sized,
-{
-    fn drop(&mut self) {
-        // Nodes should never be dropped directly.
-        // Branch has to make sure they're dropped correctly,
-        // because only Branch knows whether they contain Leaves or Branches.
-        unreachable!("PalmTree: tried to drop a Node pointer directly, this should never happen")
-    }
-}
-
-impl<K, V, C> From<Box<Leaf<K, V, C>>> for Node<K, V, C>
+impl<K, V, C> From<Pointer<Leaf<K, V, C>, C::PointerKind>> for Node<K, V, C>
 where
     C: TreeConfig<K, V>,
 {
     #[inline(always)]
-    fn from(node: Box<Leaf<K, V, C>>) -> Self {
-        let ptr: NonNull<Leaf<K, V, C>> = Box::leak(node).into();
+    fn from(node: Pointer<Leaf<K, V, C>, C::PointerKind>) -> Self {
         Self {
             types: PhantomData,
-            node: ptr.cast(),
+            node: ManuallyDrop::new(unsafe { Pointer::cast_into(node) }),
         }
     }
 }
 
-impl<K, V, C> From<Box<Branch<K, V, C>>> for Node<K, V, C>
+impl<K, V, C> From<Pointer<Branch<K, V, C>, C::PointerKind>> for Node<K, V, C>
 where
     C: TreeConfig<K, V>,
 {
     #[inline(always)]
-    fn from(node: Box<Branch<K, V, C>>) -> Self {
-        let ptr: NonNull<Branch<K, V, C>> = Box::leak(node).into();
+    fn from(node: Pointer<Branch<K, V, C>, C::PointerKind>) -> Self {
         Self {
             types: PhantomData,
-            node: ptr.cast(),
+            node: ManuallyDrop::new(unsafe { Pointer::cast_into(node) }),
         }
     }
 }
 
-impl<K, V, C> Node<K, V, C> {
-    pub(crate) unsafe fn unwrap_branch(self) -> Box<Branch<K, V, C>>
-    where
-        C: TreeConfig<K, V>,
-    {
-        let out = Box::from_raw(self.node.as_ptr().cast());
-        std::mem::forget(self);
-        out
+impl<K, V, C> Node<K, V, C>
+where
+    C: TreeConfig<K, V>,
+{
+    pub(crate) unsafe fn unwrap_branch(self) -> Pointer<Branch<K, V, C>, C::PointerKind> {
+        Pointer::cast_into(ManuallyDrop::into_inner(self.node))
     }
 
-    pub(crate) unsafe fn unwrap_leaf(self) -> Box<Leaf<K, V, C>>
-    where
-        C: TreeConfig<K, V>,
-    {
-        let out = Box::from_raw(self.node.as_ptr().cast());
-        std::mem::forget(self);
-        out
+    pub(crate) unsafe fn unwrap_leaf(self) -> Pointer<Leaf<K, V, C>, C::PointerKind> {
+        Pointer::cast_into(ManuallyDrop::into_inner(self.node))
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V, C>
-    where
-        C: TreeConfig<K, V>,
-    {
-        let ptr: *const Branch<K, V, C> = self.node.cast().as_ptr();
-        &*ptr
+    pub(crate) unsafe fn as_branch(&self) -> &Branch<K, V, C> {
+        Pointer::deref_cast(&self.node)
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V, C>
-    where
-        C: TreeConfig<K, V>,
-    {
-        let ptr: *const Leaf<K, V, C> = self.node.cast().as_ptr();
-        &*ptr
+    pub(crate) unsafe fn as_leaf(&self) -> &Leaf<K, V, C> {
+        Pointer::deref_cast(&self.node)
     }
 
     #[inline(always)]
     pub(crate) unsafe fn as_branch_mut(&mut self) -> &mut Branch<K, V, C>
     where
-        C: TreeConfig<K, V>,
+        K: Clone,
+        V: Clone,
     {
-        let ptr: *mut Branch<K, V, C> = self.node.cast().as_ptr();
-        &mut *ptr
+        Pointer::make_mut_cast(&mut self.node)
     }
 
     #[inline(always)]
     pub(crate) unsafe fn as_leaf_mut(&mut self) -> &mut Leaf<K, V, C>
     where
-        C: TreeConfig<K, V>,
+        K: Clone,
+        V: Clone,
     {
-        let ptr: *mut Leaf<K, V, C> = self.node.cast().as_ptr();
-        &mut *ptr
+        Pointer::make_mut_cast(&mut self.node)
     }
 }
 

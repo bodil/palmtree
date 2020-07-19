@@ -1,4 +1,4 @@
-use crate::{branch::Branch, config::TreeConfig, search::PathedPointer};
+use crate::{branch::Branch, config::TreeConfig, pointer::Pointer, search::PathedPointer};
 use std::{
     fmt::{Debug, Formatter},
     iter::FusedIterator,
@@ -8,7 +8,7 @@ pub struct OwnedIter<K, V, C>
 where
     C: TreeConfig<K, V>,
 {
-    tree: Option<Box<Branch<K, V, C>>>,
+    tree: Option<Pointer<Branch<K, V, C>, C::PointerKind>>,
     left: PathedPointer<(K, V), K, V, C>,
     right: PathedPointer<(K, V), K, V, C>,
     remaining: usize,
@@ -19,7 +19,10 @@ where
     K: Clone + Ord,
     C: TreeConfig<K, V>,
 {
-    pub(crate) fn new(tree: Option<Box<Branch<K, V, C>>>, remaining: usize) -> Self {
+    pub(crate) fn new(
+        tree: Option<Pointer<Branch<K, V, C>, C::PointerKind>>,
+        remaining: usize,
+    ) -> Self {
         if let Some(ref root) = tree {
             Self {
                 left: PathedPointer::lowest(&root),

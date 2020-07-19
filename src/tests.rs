@@ -168,7 +168,7 @@ where
 proptest! {
     #[test]
     fn integration_proptest(input: Input<u8,u8>) {
-        use crate::config::Tree64;
-        integration_test::<Tree64>(input);
+        use crate::{config::Tree64, pointer::Unique};
+        integration_test::<Tree64<Unique>>(input);
     }
 }

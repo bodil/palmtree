@@ -446,7 +446,10 @@ where
     /// key should be inserted, and that the key isn't already there.
     /// This is the assumption validated by the `exact_key` constructor when it
     /// returns a non-null `Err` value.
-    pub(crate) unsafe fn insert(mut self, key: K, value: V) -> Result<Self, (K, V)> {
+    pub(crate) unsafe fn insert(mut self, key: K, value: V) -> Result<Self, (K, V)>
+    where
+        V: Clone,
+    {
         let index = self.index;
         let leaf = self.deref_mut_leaf().unwrap();
         if !leaf.is_full() {
@@ -461,7 +464,7 @@ where
                     if !branch.is_full() {
                         let choose_index = if branch.has_branches() {
                             let (removed_key, removed_branch) = branch.remove_branch(index);
-                            let (left, right) = removed_branch.split();
+                            let (left, right) = Branch::split(removed_branch);
                             let left_highest = left.highest();
                             let choose_index = if &key <= left_highest {
                                 index
@@ -478,7 +481,7 @@ where
                             choose_index
                         } else {
                             let (removed_key, removed_leaf) = branch.remove_leaf(index);
-                            let (left, right) = removed_leaf.split();
+                            let (left, right) = Leaf::split(removed_leaf);
                             let left_highest = left.highest();
                             let choose_index = if &key <= left_highest {
                                 index
@@ -545,7 +548,10 @@ where
         root: &mut Branch<K, V, C>,
         key: K,
         value: V,
-    ) -> Result<Self, (K, V)> {
+    ) -> Result<Self, (K, V)>
+    where
+        V: Clone,
+    {
         let mut branch = root;
         let mut index;
         loop {

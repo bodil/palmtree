@@ -1,4 +1,7 @@
-use crate::{branch::Branch, config::TreeConfig, leaf::Leaf, search::PathedPointer, PalmTree};
+use crate::{
+    branch::Branch, config::TreeConfig, leaf::Leaf, pointer::Pointer, search::PathedPointer,
+    PalmTree,
+};
 use std::fmt::{Debug, Error, Formatter};
 
 #[derive(Debug)]
@@ -59,7 +62,10 @@ where
         self.key
     }
 
-    pub fn insert(mut self, value: V) -> &'a mut V {
+    pub fn insert(mut self, value: V) -> &'a mut V
+    where
+        V: Clone,
+    {
         // If the tree is empty, just insert a new node.
         // Note that the tree could have an allocated root even when empty,
         // and we're just ignoring that here on the assumption that it's better
@@ -67,18 +73,17 @@ where
         if self.tree.is_empty() {
             self.tree.root = Some(Branch::unit(Leaf::unit(self.key, value).into()).into());
             self.tree.size = 1;
-            return &mut self
-                .tree
-                .root
-                .as_mut()
-                .unwrap()
+            return &mut Pointer::make_mut(self.tree.root.as_mut().unwrap())
                 .get_leaf_mut(0)
                 .values_mut()[0];
         }
         let result = if self.cursor.is_null() {
             unsafe {
-                self.cursor
-                    .push_last(self.tree.root.as_mut().unwrap(), self.key, value)
+                self.cursor.push_last(
+                    Pointer::make_mut(self.tree.root.as_mut().unwrap()),
+                    self.key,
+                    value,
+                )
             }
         } else {
             unsafe { self.cursor.insert(self.key, value) }
